@@ -1,0 +1,5113 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "GP Control Plane API",
+    "version": "0.4.4",
+    "description": "Alpha Core/Web split API contract for the headless runtime and штатный Web UI. The contract contains the registered /api/core, /api/service, /api/web and /openapi.json routes; legacy root-level APIs are removed before 1.0."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current Swagger origin. When opened from Web UI it uses the board address; when opened from Core it uses the local Core address."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Authentication",
+      "description": "Create and rotate the Bearer token used by protected API operations."
+    },
+    {
+      "name": "Core Status",
+      "description": "Product/core runtime state."
+    },
+    {
+      "name": "Core Strategy Discovery",
+      "description": "Start, stop, progress, logs and preflight for strategy discovery."
+    },
+    {
+      "name": "Core Presets",
+      "description": "Domain lists and v2fly-assisted domain selection."
+    },
+    {
+      "name": "Core Backups",
+      "description": "Backup, upload, download and restore of internal GP data."
+    },
+    {
+      "name": "Core Clean-Install Vault",
+      "description": "One pending device-local vault used only by the explicit clean-install recovery flow."
+    },
+    {
+      "name": "Core Runs",
+      "description": "Full run history, run logs and strategy candidates."
+    },
+    {
+      "name": "Core Settings",
+      "description": "Settings that affect real strategy discovery runs."
+    },
+    {
+      "name": "Core Events",
+      "description": "Normalized product events."
+    },
+    {
+      "name": "Service Status",
+      "description": "Installed GP service and data state."
+    },
+    {
+      "name": "Service Releases",
+      "description": "Read-only information about available GP releases. Installation is performed only by the explicit clean-install procedure outside this API."
+    },
+    {
+      "name": "Service V2fly",
+      "description": "Local v2fly storage status and update actions."
+    },
+    {
+      "name": "Web Slices",
+      "description": "Штатный Web UI optimized list slices, pagination and screen-specific views."
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "getHealth",
+        "summary": "Get API health",
+        "description": "Public health check. It does not require a Bearer token.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "API is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "login",
+        "summary": "Create a Bearer token",
+        "description": "Public login endpoint. Use the returned access token as `Authorization: Bearer <access_token>` for protected operations.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              },
+              "examples": {
+                "admin": {
+                  "value": {
+                    "username": "admin",
+                    "password": "admin"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BearerToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/auth/change-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "changePassword",
+        "summary": "Change the admin password and rotate Bearer tokens",
+        "description": "Requires a valid Bearer token. On success, all previous tokens are invalidated and a replacement token is returned.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed and replacement Bearer token created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BearerToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/status": {
+      "get": {
+        "tags": [
+          "Core Status"
+        ],
+        "operationId": "getCoreStatus",
+        "summary": "Get current product runtime state",
+        "description": "Answers what the GP product core is doing now: current discovery run, core jobs and product runtime state.",
+        "responses": {
+          "200": {
+            "description": "Current core state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreStatus"
+                },
+                "examples": {
+                  "idle": {
+                    "$ref": "#/components/examples/CoreStatusIdle"
+                  },
+                  "running": {
+                    "$ref": "#/components/examples/CoreStatusRunning"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/strategy-discovery/start-run": {
+      "post": {
+        "tags": [
+          "Core Strategy Discovery"
+        ],
+        "operationId": "startStrategyDiscoveryRun",
+        "summary": "Start a strategy discovery run",
+        "description": "Routes a discovery request by mode. The request contains final concrete domains and settings, not a preset id or live preset link.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunRequest"
+              },
+              "examples": {
+                "multiDomain30Parallel": {
+                  "$ref": "#/components/examples/StartRunRequestMultiDomain"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Run accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunAccepted"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/strategy-discovery/stop-current-run": {
+      "post": {
+        "tags": [
+          "Core Strategy Discovery"
+        ],
+        "operationId": "stopCurrentStrategyDiscoveryRun",
+        "summary": "Stop the current strategy discovery run",
+        "responses": {
+          "202": {
+            "description": "Stop requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunAccepted"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/strategy-discovery/current-run-progress": {
+      "get": {
+        "tags": [
+          "Core Strategy Discovery"
+        ],
+        "operationId": "getCurrentStrategyDiscoveryProgress",
+        "summary": "Get current run progress",
+        "responses": {
+          "200": {
+            "description": "Current run progress or idle state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProgress"
+                },
+                "examples": {
+                  "running": {
+                    "$ref": "#/components/examples/RunProgressRunning"
+                  },
+                  "idle": {
+                    "$ref": "#/components/examples/RunProgressIdle"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/strategy-discovery/current-run-latest-log": {
+      "get": {
+        "tags": [
+          "Core Strategy Discovery"
+        ],
+        "operationId": "getCurrentStrategyDiscoveryLatestLog",
+        "summary": "Get latest log tail for the current run",
+        "responses": {
+          "200": {
+            "description": "Latest run log tail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunLogTail"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunLogTail"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/strategy-discovery/preflight": {
+      "get": {
+        "tags": [
+          "Core Strategy Discovery"
+        ],
+        "operationId": "getStrategyDiscoveryPreflight",
+        "summary": "Check discovery prerequisites",
+        "description": "Checks GP/zapret/v2fly prerequisites needed to start discovery. It reports product readiness, not OS monitoring metrics.",
+        "responses": {
+          "200": {
+            "description": "Preflight facts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightStatus"
+                },
+                "examples": {
+                  "ready": {
+                    "$ref": "#/components/examples/PreflightStatusReady"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/presets/domain-lists": {
+      "get": {
+        "tags": [
+          "Core Presets"
+        ],
+        "operationId": "getDomainLists",
+        "summary": "List stored domain lists",
+        "description": "Returns only real stored lists: required first, desired second, then user lists in storage order.",
+        "responses": {
+          "200": {
+            "description": "Stored domain lists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainListsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/DomainListsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/presets/save-domain-list": {
+      "post": {
+        "tags": [
+          "Core Presets"
+        ],
+        "operationId": "saveDomainList",
+        "summary": "Save one domain list",
+        "description": "Saves one required, desired or user domain list. The list contents replace the previous contents of that list.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveDomainListRequest"
+              },
+              "examples": {
+                "saveUserList": {
+                  "$ref": "#/components/examples/SaveDomainListRequest"
+                },
+                "saveRequiredList": {
+                  "$ref": "#/components/examples/SaveRequiredDomainListRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainList"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/DomainList"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/presets/delete-user-domain-list": {
+      "post": {
+        "tags": [
+          "Core Presets"
+        ],
+        "operationId": "deleteUserDomainLists",
+        "summary": "Delete selected user domain lists",
+        "description": "Deletes only explicitly listed user-created domain lists. The list_ids array must not be empty; to delete all user lists, the caller must enumerate every user list id. Required and desired lists cannot be deleted by this method.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDomainListRequest"
+              },
+              "examples": {
+                "deleteUserList": {
+                  "$ref": "#/components/examples/DeleteDomainListRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResult"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/DeleteResult"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/presets/v2fly/categories": {
+      "get": {
+        "tags": [
+          "Core Presets"
+        ],
+        "operationId": "getV2flyCategories",
+        "summary": "List local v2fly categories",
+        "description": "Returns local v2fly categories and storage state. If storage is not prepared, the response is still 200 with storage.state=missing.",
+        "responses": {
+          "200": {
+            "description": "v2fly categories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2flyCategoriesResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/V2flyCategoriesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/presets/v2fly/category-domains": {
+      "get": {
+        "tags": [
+          "Core Presets"
+        ],
+        "operationId": "getV2flyCategoryDomains",
+        "summary": "Get domains from one v2fly category",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "example": "youtube"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Domains from the requested category",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2flyCategoryDomainsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/V2flyCategoryDomainsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/backups/create": {
+      "post": {
+        "tags": [
+          "Core Backups"
+        ],
+        "operationId": "createBackup",
+        "summary": "Create a GP data backup",
+        "responses": {
+          "201": {
+            "description": "Backup created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSnapshot"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/BackupSnapshot"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/RuntimeBusy"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/backups/list": {
+      "get": {
+        "tags": [
+          "Core Backups"
+        ],
+        "operationId": "listBackups",
+        "summary": "List local backups",
+        "responses": {
+          "200": {
+            "description": "Backups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/BackupsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/backups/restore": {
+      "post": {
+        "tags": [
+          "Core Backups"
+        ],
+        "operationId": "restoreBackup",
+        "summary": "Restore a GP data backup",
+        "description": "Restores the selected snapshot synchronously after UI/client confirmation. There is no separate restore-preview endpoint in the target contract; the response is sent only after the restore succeeds.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupActionRequest"
+              },
+              "examples": {
+                "selectSnapshot": {
+                  "$ref": "#/components/examples/BackupActionRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Restore completed synchronously. The server currently returns HTTP 202 for this completed action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestoreAccepted"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/BackupRestoreAccepted"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/RuntimeBusy"
+          }
+        }
+      }
+    },
+    "/api/core/backups/delete": {
+      "post": {
+        "tags": [
+          "Core Backups"
+        ],
+        "operationId": "deleteBackup",
+        "summary": "Delete a backup snapshot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupActionRequest"
+              },
+              "examples": {
+                "selectSnapshot": {
+                  "$ref": "#/components/examples/BackupActionRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backup deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResult"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/DeleteResult"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/RuntimeBusy"
+          }
+        }
+      }
+    },
+    "/api/core/backups/download-archive": {
+      "get": {
+        "tags": [
+          "Core Backups"
+        ],
+        "operationId": "downloadBackupArchive",
+        "summary": "Download a backup archive",
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "example": "snapshot_20260722_173000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup ZIP archive",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/backups/upload": {
+      "post": {
+        "tags": [
+          "Core Backups"
+        ],
+        "operationId": "uploadBackupFile",
+        "summary": "Upload a backup archive",
+        "description": "Accepts a ZIP backup, validates structure, checksum and compatibility, then imports it into backup storage.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            },
+            "application/zip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Backup imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSnapshot"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/BackupSnapshot"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/RuntimeBusy"
+          }
+        }
+      }
+    },
+    "/api/core/clean-install-vaults/create": {
+      "post": {
+        "tags": ["Core Clean-Install Vault"],
+        "operationId": "createCleanInstallVault",
+        "summary": "Create the one pending device-local clean-install vault",
+        "description": "Creates one pending device-local vault. Its local handoff remains on this device; the response contains public metadata only.",
+        "responses": {
+          "201": {
+            "description": "Pending vault created; response contains public metadata only.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CleanInstallVaultCreateResponse"},
+                "examples": {"default": {"$ref": "#/components/examples/CleanInstallVaultCreateResponse"}}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/core/clean-install-vaults/list": {
+      "get": {
+        "tags": ["Core Clean-Install Vault"],
+        "operationId": "listCleanInstallVaults",
+        "summary": "List pending clean-install vault metadata",
+        "responses": {
+          "200": {
+            "description": "Public pending vault metadata.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CleanInstallVaultListResponse"},
+                "examples": {"default": {"$ref": "#/components/examples/CleanInstallVaultListResponse"}}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/core/clean-install-vaults/status": {
+      "get": {
+        "tags": ["Core Clean-Install Vault"],
+        "operationId": "getCleanInstallVaultStatus",
+        "summary": "Get public status of one pending clean-install vault",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+            "example": "4f2a9c8e1b3d6a7f0c5e2d9b8a1f4c6e"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public status metadata.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CleanInstallVaultStatus"},
+                "examples": {"default": {"$ref": "#/components/examples/CleanInstallVaultStatus"}}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/core/clean-install-vaults/restore": {
+      "post": {
+        "tags": ["Core Clean-Install Vault"],
+        "operationId": "restoreCleanInstallVault",
+        "summary": "Restore and delete a verified pending clean-install vault",
+        "description": "Requires explicit confirmation. The operation completes only after semantic verification, SQLite readiness/integrity verification and deletion of the source vault. Failed paths retain vault and handoff.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CleanInstallVaultRestoreRequest"},
+              "examples": {"restore": {"$ref": "#/components/examples/CleanInstallVaultRestoreRequest"}}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restore was verified and the source vault was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/CleanInstallVaultRestoreResponse"},
+                "examples": {"default": {"$ref": "#/components/examples/CleanInstallVaultRestoreResponse"}}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "default": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/core/run-settings": {
+      "get": {
+        "tags": [
+          "Core Settings"
+        ],
+        "operationId": "getRunSettings",
+        "summary": "Get discovery run settings",
+        "responses": {
+          "200": {
+            "description": "Run settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSettings"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunSettings"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/run-settings/save": {
+      "post": {
+        "tags": [
+          "Core Settings"
+        ],
+        "operationId": "saveRunSettings",
+        "summary": "Save discovery run settings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunSettings"
+              },
+              "examples": {
+                "discoverySettings": {
+                  "$ref": "#/components/examples/RunSettings"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved run settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSettings"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunSettings"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/runs/history": {
+      "get": {
+        "tags": [
+          "Core Runs"
+        ],
+        "operationId": "getRunHistory",
+        "summary": "Get full run history",
+        "description": "Returns product run history without UI pagination. UI slices belong to /api/web/...",
+        "responses": {
+          "200": {
+            "description": "Run history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunHistoryResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunHistoryResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/runs/latest-log": {
+      "get": {
+        "tags": [
+          "Core Runs"
+        ],
+        "operationId": "getRunLatestLog",
+        "summary": "Get latest log tail for a run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "example": "run_20260722_173000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run log tail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunLogTail"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RunLogTail"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/strategy-candidates": {
+      "get": {
+        "tags": [
+          "Core Runs"
+        ],
+        "operationId": "getStrategyCandidates",
+        "summary": "Get filtered strategy candidates",
+        "description": "Returns normalized product candidate data only for filtered requests. At least one filter is required. Use /api/core/strategy-candidates/export for full streaming export.",
+        "responses": {
+          "200": {
+            "description": "Strategy candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyCandidatesResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/StrategyCandidatesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "description": "Exact domain name. Returns candidates linked to this domain.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube.com"
+          },
+          {
+            "name": "domains",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated domain names. Returns candidates linked to any listed domain.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube.com,discord.com"
+          },
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "description": "Exact strategy id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "tcp-5e8f1a2b3c4d"
+          },
+          {
+            "name": "protocol",
+            "in": "query",
+            "required": false,
+            "description": "Strategy protocol or transport, for example tcp, quic or tls.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "tcp"
+          },
+          {
+            "name": "source_mode",
+            "in": "query",
+            "required": false,
+            "description": "Link source: single_domain or multi_domain.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "single_domain",
+                "multi_domain"
+              ]
+            },
+            "example": "single_domain"
+          },
+          {
+            "name": "family",
+            "in": "query",
+            "required": false,
+            "description": "Normalized strategy family.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "fake-multi"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "description": "Text search across id, protocol, args, family and linked domains.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "fake"
+          }
+        ]
+      }
+    },
+    "/api/core/strategy-candidates/export": {
+      "get": {
+        "tags": [
+          "Core Runs"
+        ],
+        "operationId": "exportStrategyCandidates",
+        "summary": "Stream strategy candidates as NDJSON",
+        "description": "Streams one StrategyCandidate JSON object per line. This endpoint can be called without filters for a full export; optional filters use the same semantics as /api/core/strategy-candidates. It is intended for large exports and external clients.",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "description": "Exact domain name. Returns candidates linked to this domain.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube.com"
+          },
+          {
+            "name": "domains",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated domain names. Returns candidates linked to any listed domain.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube.com,discord.com"
+          },
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "description": "Exact strategy id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "tcp-5e8f1a2b3c4d"
+          },
+          {
+            "name": "protocol",
+            "in": "query",
+            "required": false,
+            "description": "Strategy protocol or transport, for example tcp, quic or tls.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "tcp"
+          },
+          {
+            "name": "source_mode",
+            "in": "query",
+            "required": false,
+            "description": "Link source: single_domain or multi_domain.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "single_domain",
+                "multi_domain"
+              ]
+            },
+            "example": "single_domain"
+          },
+          {
+            "name": "family",
+            "in": "query",
+            "required": false,
+            "description": "Normalized strategy family.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "fake-multi"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "description": "Text search across id, protocol, args, family and linked domains.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "fake"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "NDJSON stream with one strategy candidate per line",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON objects matching StrategyCandidate."
+                },
+                "example": "{\"id\":\"tcp-5e8f1a2b3c4d\",\"protocol\":\"tcp\",\"args\":\"--dpi-desync=fake\",\"status\":\"candidate\"}\n"
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/core/events": {
+      "get": {
+        "tags": [
+          "Core Events"
+        ],
+        "operationId": "getCoreEvents",
+        "summary": "Get normalized product events",
+        "parameters": [
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "core:000000000123"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Product events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/CoreEventsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/service/status": {
+      "get": {
+        "tags": [
+          "Service Status"
+        ],
+        "operationId": "getServiceStatus",
+        "summary": "Get installed GP service status",
+        "description": "Answers whether the installed GP service and its data/install state are alive.",
+        "responses": {
+          "200": {
+            "description": "Service status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ServiceStatus"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/service/releases/available": {
+      "get": {
+        "tags": [
+          "Service Releases"
+        ],
+        "operationId": "getAvailableReleases",
+        "summary": "Get available GP releases",
+        "responses": {
+          "200": {
+            "description": "Available releases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailableReleases"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AvailableReleases"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/service/v2fly/local-storage-status": {
+      "get": {
+        "tags": [
+          "Service V2fly"
+        ],
+        "operationId": "getV2flyLocalStorageStatus",
+        "summary": "Get local v2fly storage status",
+        "responses": {
+          "200": {
+            "description": "Local v2fly storage status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V2flyStorageStatus"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/V2flyStorageStatus"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/service/v2fly/check-updates": {
+      "post": {
+        "tags": [
+          "Service V2fly"
+        ],
+        "operationId": "checkV2flyUpdates",
+        "summary": "Check v2fly source updates",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Error"
+          },
+          "200": {
+            "description": "Update check completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceActionResult"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ServiceActionResult"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/service/v2fly/update-local-storage": {
+      "post": {
+        "tags": [
+          "Service V2fly"
+        ],
+        "operationId": "updateV2flyLocalStorage",
+        "summary": "Update local v2fly storage",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Error"
+          },
+          "200": {
+            "description": "Storage update completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceActionResult"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ServiceActionResult"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/web/status": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebStatus",
+        "summary": "Get Web UI system status",
+        "description": "Returns Web-owned system diagnostics, including zapret2 readiness for the System card. Core status remains limited to product runtime state.",
+        "responses": {
+          "200": {
+            "description": "Web UI system status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/run-preferences": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebRunPreferences",
+        "summary": "Get Web UI run form preferences",
+        "description": "Returns only штатный Web UI form state. Core start-run receives explicit domains and run parameters, not this saved UI state.",
+        "responses": {
+          "200": {
+            "description": "Saved Web UI run preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebRunPreferencesResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebRunPreferencesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "saveWebRunPreferences",
+        "summary": "Save Web UI run form preferences",
+        "description": "Stores штатный Web UI form state for the next browser session. This does not start discovery and does not change durable Core results.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebRunPreferencesSaveRequest"
+              },
+              "examples": {
+                "default": {
+                  "$ref": "#/components/examples/WebRunPreferencesSaveRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved Web UI run preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebRunPreferencesResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebRunPreferencesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/runs/history-page": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebRunHistoryPage",
+        "summary": "Get a paginated run history page for штатный Web UI",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated run history page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedRunHistoryResponse"
+                },
+                "examples": {
+                  "page": {
+                    "$ref": "#/components/examples/PagedRunHistoryResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/candidate-domain-index-page": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebCandidateDomainIndexPage",
+        "summary": "Get a paginated candidate domain index page for the Web UI",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated candidate domain index page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedCandidateDomainIndexResponse"
+                },
+                "examples": {
+                  "page": {
+                    "$ref": "#/components/examples/PagedCandidateDomainIndexResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/strategy-candidates-page": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebStrategyCandidatesPage",
+        "summary": "Get a paginated strategy candidates page for штатный Web UI",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          },
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube.com"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated strategy candidates page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedStrategyCandidatesResponse"
+                },
+                "examples": {
+                  "page": {
+                    "$ref": "#/components/examples/PagedStrategyCandidatesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/presets": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebPresets",
+        "summary": "Get Web UI preset metadata and lists",
+        "description": "Returns штатный Web UI preset metadata plus built-in domain set labels. Domains for custom presets are included only when requested.",
+        "parameters": [
+          {
+            "name": "include_domains",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "example": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Web UI presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPresetsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebPresetsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/presets/domains": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebPresetDomains",
+        "summary": "Get a paginated Web UI preset domain page",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WebPresetScope"
+            },
+            "example": "finder"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "example": "required"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/WebPresetKind"
+            },
+            "example": "system"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "youtube"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            },
+            "example": 200
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          },
+          {
+            "name": "include_disabled",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true
+            },
+            "example": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preset domains page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPresetDomainsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebPresetDomainsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/presets/save": {
+      "post": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "saveWebPreset",
+        "summary": "Save a Web UI preset domain list",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebPresetSaveRequest"
+              },
+              "examples": {
+                "default": {
+                  "$ref": "#/components/examples/WebPresetSaveRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Web UI presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPresetsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebPresetsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/presets/delete-user-lists": {
+      "post": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "deleteWebUserPresetLists",
+        "summary": "Delete Web UI user preset lists",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebPresetDeleteUserListsRequest"
+              },
+              "examples": {
+                "default": {
+                  "$ref": "#/components/examples/WebPresetDeleteUserListsRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Web UI presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPresetsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebPresetsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/events": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "getWebEvents",
+        "summary": "Get a штатный Web UI event slice",
+        "parameters": [
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "web:000000000123"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UI event slice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsResponse"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebEventsResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/web/events/stream": {
+      "get": {
+        "tags": [
+          "Web Slices"
+        ],
+        "operationId": "streamWebEvents",
+        "summary": "Stream штатный Web UI events",
+        "description": "Server-sent event stream for live Web UI refreshes. Event names match the Web UI event types returned by /api/web/events.",
+        "responses": {
+          "200": {
+            "description": "Live Web UI event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/WebEventsStream"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque"
+      }
+    },
+    "parameters": {
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "example": 50
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "example": 0
+      }
+    },
+    "responses": {
+      "AuthenticationRequired": {
+        "description": "Bearer authentication is required or the supplied token is invalid",
+        "headers": {
+          "WWW-Authenticate": {
+            "description": "Bearer authentication challenge emitted by the server",
+            "schema": {
+              "type": "string",
+              "const": "Bearer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "RuntimeBusy": {
+        "description": "Runtime is busy",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "runtimeBusy": {
+                "value": {
+                  "error": {
+                    "code": "runtime_busy",
+                    "message": "The operation is unavailable while discovery is running.",
+                    "details": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Error": {
+        "description": "Error response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "plainError": {
+                "$ref": "#/components/examples/ErrorResponse"
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "example": "admin"
+          },
+          "password": {
+            "type": "string",
+            "format": "password"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "format": "password"
+          },
+          "new_password": {
+            "type": "string",
+            "format": "password",
+            "anyOf": [
+              {
+                "const": "admin"
+              },
+              {
+                "minLength": 8
+              }
+            ]
+          }
+        }
+      },
+      "BearerToken": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "const": 86400
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupRestoreAccepted": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "status",
+          "snapshot_id"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "const": true
+          },
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "snapshot_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AvailableReleases": {
+        "type": "object",
+        "required": [
+          "current",
+          "releases"
+        ],
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/InstalledVersion"
+          },
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseInfo"
+            }
+          },
+          "stable_release_url": {
+            "type": "string"
+          },
+          "prerelease_url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupActionRequest": {
+        "type": "object",
+        "required": [
+          "snapshot_id"
+        ],
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupSnapshot": {
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "created_at",
+          "schema_version"
+        ],
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum": {
+            "type": "string"
+          },
+          "entity_counts": {
+            "$ref": "#/components/schemas/EntityCounts"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupsResponse": {
+        "type": "object",
+        "required": [
+          "backups"
+        ],
+        "properties": {
+          "backups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupSnapshot"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CleanInstallVaultCreateResponse": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "archive_sha256",
+          "archive_size_bytes",
+          "schema_version",
+          "semantic_manifest"
+        ],
+        "properties": {
+          "vault_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+          "archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "archive_size_bytes": {"type": "integer", "minimum": 1},
+          "schema_version": {"type": "string", "const": "7"},
+          "semantic_manifest": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "CleanInstallVaultStatus": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "created_at",
+          "schema_version",
+          "archive_sha256",
+          "archive_size_bytes",
+          "verification",
+          "pending"
+        ],
+        "properties": {
+          "vault_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+          "created_at": {"type": "string"},
+          "schema_version": {"type": "string", "const": "7"},
+          "archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "archive_size_bytes": {"type": "integer", "minimum": 1},
+          "verification": {"type": "string"},
+          "pending": {"type": "boolean", "const": true}
+        },
+        "additionalProperties": false
+      },
+      "CleanInstallVaultListResponse": {
+        "type": "object",
+        "required": ["vaults"],
+        "properties": {
+          "vaults": {"type": "array", "maxItems": 1, "items": {"$ref": "#/components/schemas/CleanInstallVaultStatus"}}
+        },
+        "additionalProperties": false
+      },
+      "CleanInstallVaultRestoreRequest": {
+        "type": "object",
+        "required": ["vault_id", "confirm_restore"],
+        "properties": {
+          "vault_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+          "confirm_restore": {"type": "boolean", "const": true}
+        },
+        "additionalProperties": false
+      },
+      "CleanInstallVaultRestoreResponse": {
+        "type": "object",
+        "required": ["completed", "vault_id", "verification", "storage_status", "cleanup"],
+        "properties": {
+          "completed": {"type": "boolean", "const": true},
+          "vault_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+          "verification": {"type": "object", "additionalProperties": true},
+          "storage_status": {"type": "object", "additionalProperties": true},
+          "cleanup": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "CoreStatus": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "stopping",
+              "degraded",
+              "error"
+            ]
+          },
+          "current_run": {
+            "$ref": "#/components/schemas/RunRef"
+          },
+          "last_snapshot": {
+            "$ref": "#/components/schemas/PostRunSnapshotOutcome"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageStatus"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebStatusResponse": {
+        "type": "object",
+        "required": [
+          "version",
+          "state",
+          "settings",
+          "run_preferences",
+          "candidate_version",
+          "paths",
+          "zapret2"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "run_preferences": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "candidate_version": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "paths": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "zapret2": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "PostRunSnapshotOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "status",
+              "completed_at",
+              "snapshot_id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "snapshot"
+              },
+              "status": {
+                "const": "success"
+              },
+              "completed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "snapshot_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "snapshot": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "status",
+              "completed_at",
+              "error_code",
+              "error_message"
+            ],
+            "properties": {
+              "kind": {
+                "const": "snapshot"
+              },
+              "status": {
+                "const": "failed"
+              },
+              "completed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "error_code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "error_message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "DeleteDomainListRequest": {
+        "type": "object",
+        "required": [
+          "list_ids"
+        ],
+        "properties": {
+          "list_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^user:.+"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeleteResult": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "DomainList": {
+        "type": "object",
+        "required": [
+          "list_id",
+          "kind",
+          "name",
+          "domains"
+        ],
+        "properties": {
+          "list_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "required",
+              "desired",
+              "user"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DomainListsResponse": {
+        "type": "object",
+        "required": [
+          "lists"
+        ],
+        "properties": {
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainList"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "EntityCounts": {
+        "type": "object",
+        "properties": {
+          "domains": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "strategies": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "strategy_domain_links": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "domain_lists": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "settings": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "details"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "invalid_request"
+              },
+              "message": {
+                "type": "string",
+                "example": "The request is invalid."
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Event": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "type",
+          "created_at"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "EventsResponse": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next_after_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "InstalledVersion": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "installed_ref": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CandidateDomainIndexItem": {
+        "type": "object",
+        "required": [
+          "domain",
+          "strategy_count",
+          "protocols"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "strategy_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "protocols": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateDomainProtocolCount"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CandidateDomainProtocolCount": {
+        "type": "object",
+        "required": [
+          "protocol",
+          "count"
+        ],
+        "properties": {
+          "protocol": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "CandidateDomainIndexResponse": {
+        "type": "object",
+        "required": [
+          "domains",
+          "total",
+          "strategy_total"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateDomainIndexItem"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "strategy_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tested_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "PagedRunHistoryResponse": {
+        "type": "object",
+        "required": ["runs", "limit", "offset", "total", "has_more"],
+        "properties": {
+          "runs": {"type": "array", "items": {"$ref": "#/components/schemas/RunHistoryItem"}},
+          "limit": {"type": "integer", "minimum": 1},
+          "offset": {"type": "integer", "minimum": 0},
+          "total": {"type": "integer", "minimum": 0},
+          "has_more": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "PagedCandidateDomainIndexResponse": {
+        "type": "object",
+        "required": ["domains", "total", "strategy_total", "limit", "offset", "has_more"],
+        "properties": {
+          "domains": {"type": "array", "items": {"$ref": "#/components/schemas/CandidateDomainIndexItem"}},
+          "total": {"type": "integer", "minimum": 0},
+          "strategy_total": {"type": "integer", "minimum": 0},
+          "tested_domains": {"type": "array", "items": {"type": "string"}},
+          "version": {"type": "object", "additionalProperties": {"type": "integer"}},
+          "limit": {"type": "integer", "minimum": 1},
+          "offset": {"type": "integer", "minimum": 0},
+          "has_more": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "PagedStrategyCandidatesResponse": {
+        "type": "object",
+        "required": ["candidates", "total", "limit", "offset", "has_more", "tested_domains", "version"],
+        "properties": {
+          "candidates": {"type": "array", "items": {"$ref": "#/components/schemas/StrategyCandidate"}},
+          "total": {"type": "integer", "minimum": 0},
+          "limit": {"type": "integer", "minimum": 1},
+          "offset": {"type": "integer", "minimum": 0},
+          "has_more": {"type": "boolean"},
+          "tested_domains": {"type": "array", "items": {"type": "string"}},
+          "version": {"type": "object", "additionalProperties": {"type": "integer"}}
+        },
+        "additionalProperties": false
+      },
+      "Pagination": {
+        "type": "object",
+        "required": [
+          "limit",
+          "offset",
+          "total",
+          "has_more"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PreflightStatus": {
+        "type": "object",
+        "required": [
+          "ready",
+          "checks"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreflightCheck"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PreflightCheck": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "unknown"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReleaseInfo": {
+        "type": "object",
+        "required": [
+          "version",
+          "channel",
+          "ref"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "stable",
+              "prerelease"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunAccepted": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "run_id",
+          "status"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "const": true
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunHistoryItem": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "started_at"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Runtime execution kind that identifies the discovery workflow which produced the run."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RunMode"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp recorded for this run history entry; for the initial entry it is the run start time."
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunHistoryResponse": {
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunHistoryItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunLogTail": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "kind",
+          "status",
+          "stdout_tail",
+          "stdout_append",
+          "stderr_tail",
+          "stderr_append",
+          "stderr_diagnostics",
+          "stdout_size",
+          "stderr_size",
+          "progress",
+          "metrics",
+          "run_settings"
+        ],
+        "properties": {
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stdout_tail": {
+            "type": "string"
+          },
+          "stdout_append": {
+            "type": "string"
+          },
+          "stderr_tail": {
+            "type": "string"
+          },
+          "stderr_append": {
+            "type": "string"
+          },
+          "stderr_diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "stdout_log": {
+            "type": "string"
+          },
+          "stderr_log": {
+            "type": "string"
+          },
+          "stdout_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stderr_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "progress": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "run_settings": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunMode": {
+        "type": "string",
+        "enum": [
+          "standard",
+          "multi_domain",
+          "common_strategy"
+        ]
+      },
+      "RunProgress": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "current_file": {
+            "type": "string"
+          },
+          "domains_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "domains_processed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attempts_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attempts_processed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "strategies_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "strategies_processed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "elapsed_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "eta_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "avg_attempt_seconds": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunRef": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "status"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunSettings": {
+        "type": "object",
+        "properties": {
+          "curl_parallelism_default": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "curl_parallelism_max": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "curl_max_time": {
+            "type": "number",
+            "minimum": 1
+          },
+          "curl_max_time_quic": {
+            "type": "number",
+            "minimum": 1
+          },
+          "curl_max_time_doh": {
+            "type": "number",
+            "minimum": 1
+          },
+          "enable_ipv6": {
+            "type": "boolean"
+          },
+          "debug_stdout": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "queued",
+          "running",
+          "saving",
+          "stopping",
+          "stopped",
+          "success",
+          "failed",
+          "timeout"
+        ]
+      },
+      "SaveDomainListRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "domains"
+        ],
+        "properties": {
+          "list_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "required",
+              "desired",
+              "user"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceStatus": {
+        "type": "object",
+        "required": [
+          "state",
+          "mode",
+          "services",
+          "version",
+          "data_state",
+          "updated_at"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive",
+              "degraded",
+              "error",
+              "unknown"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "core",
+              "monolith",
+              "web_proxy",
+              "unknown"
+            ]
+          },
+          "services": {
+            "type": "object",
+            "required": [
+              "core",
+              "web"
+            ],
+            "properties": {
+              "core": {
+                "$ref": "#/components/schemas/ServiceComponentStatus"
+              },
+              "web": {
+                "$ref": "#/components/schemas/ServiceComponentStatus"
+              }
+            },
+            "additionalProperties": false
+          },
+          "version": {
+            "$ref": "#/components/schemas/InstalledVersion"
+          },
+          "data_state": {
+            "$ref": "#/components/schemas/ServiceDataState"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceComponentStatus": {
+        "type": "object",
+        "required": [
+          "name",
+          "state",
+          "role",
+          "required"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "embedded",
+              "disabled",
+              "unknown"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceDataState": {
+        "type": "object",
+        "required": [
+          "state",
+          "state_dir",
+          "v2fly"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "preparing",
+              "error",
+              "unknown"
+            ]
+          },
+          "state_dir": {
+            "type": "string"
+          },
+          "v2fly": {
+            "type": "object",
+            "required": [
+              "state",
+              "source_commit",
+              "group_count"
+            ],
+            "properties": {
+              "state": {
+                "type": "string"
+              },
+              "source_commit": {
+                "type": "string"
+              },
+              "group_count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "StartRunRequest": {
+        "type": "object",
+        "required": [
+          "domains"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RunMode"
+          },
+          "domains": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "protocols": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tcp",
+                "quic"
+              ]
+            }
+          },
+          "curl_parallelism": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "curl_max_time": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "curl_max_time_quic": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "curl_max_time_doh": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "debug_stdout": {
+                "type": "boolean"
+              },
+              "enable_http": {
+                "type": "boolean"
+              },
+              "enable_ipv6": {
+                "type": "boolean"
+              },
+              "enable_tls12": {
+                "type": "boolean"
+              },
+              "enable_tls13": {
+                "type": "boolean"
+              },
+              "include_quic": {
+                "type": "boolean"
+              },
+              "repeats": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "repeat_parallel": {
+                "type": "boolean"
+              },
+              "scan_level": {
+                "type": "string",
+                "enum": [
+                  "quick",
+                  "standard",
+                  "force"
+                ]
+              },
+              "skip_dnscheck": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "StorageStatus": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state_dir": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StrategyCandidate": {
+        "type": "object",
+        "required": [
+          "id",
+          "protocol",
+          "args",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "args": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string"
+          },
+          "fragmentation_class": {
+            "type": "string"
+          },
+          "fragmentation_safe": {
+            "type": "boolean"
+          },
+          "fragmentation_reason": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "family_key": {
+            "type": "string"
+          },
+          "family_rank": {
+            "type": "integer"
+          },
+          "family_reason": {
+            "type": "string"
+          },
+          "seen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StrategyCandidateSeen"
+            }
+          },
+          "common_seen": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StrategyCandidateCommonSeen"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StrategyCandidateSeen": {
+        "type": "object",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          },
+          "ip_version": {
+            "type": "string"
+          },
+          "seen_at": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StrategyCandidateCommonSeen": {
+        "type": "object",
+        "required": [
+          "domains"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StrategyCandidatesResponse": {
+        "type": "object",
+        "required": [
+          "candidates",
+          "total",
+          "filters"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StrategyCandidate"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filters": {
+            "$ref": "#/components/schemas/StrategyCandidateFilters"
+          }
+        },
+        "additionalProperties": false
+      },
+      "V2flyCategoriesResponse": {
+        "type": "object",
+        "required": [
+          "categories"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/V2flyCategory"
+            }
+          },
+          "storage": {
+            "$ref": "#/components/schemas/V2flyStorageStatus"
+          }
+        },
+        "additionalProperties": false
+      },
+      "V2flyCategory": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "domain_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "V2flyCategoryDomainsResponse": {
+        "type": "object",
+        "required": [
+          "category",
+          "domains"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "storage": {
+            "$ref": "#/components/schemas/V2flyStorageStatus"
+          }
+        },
+        "additionalProperties": false
+      },
+      "V2flyStorageStatus": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "preparing",
+              "error",
+              "unknown"
+            ]
+          },
+          "source_repo": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "source_commit": {
+            "type": "string"
+          },
+          "prepared_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "group_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "archive_sha256": {
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "type": "string"
+          },
+          "last_update_check": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebRunPreferences": {
+        "type": "object",
+        "required": [
+          "domains",
+          "domain_preset",
+          "discovery_profile",
+          "run_mode"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "domain_preset": {
+            "type": "string"
+          },
+          "discovery_profile": {
+            "type": "string",
+            "enum": [
+              "quick",
+              "standard",
+              "force",
+              "custom"
+            ]
+          },
+          "run_mode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "multi"
+            ]
+          },
+          "curl_parallelism": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "enable_http": {
+            "type": "boolean"
+          },
+          "enable_tls12": {
+            "type": "boolean"
+          },
+          "enable_tls13": {
+            "type": "boolean"
+          },
+          "include_quic": {
+            "type": "boolean"
+          },
+          "enable_ipv6": {
+            "type": "boolean"
+          },
+          "scan_level": {
+            "type": "string",
+            "enum": [
+              "quick",
+              "standard",
+              "force"
+            ]
+          },
+          "repeats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "repeat_parallel": {
+            "type": "boolean"
+          },
+          "skip_dnscheck": {
+            "type": "boolean"
+          },
+          "skip_ipblock": {
+            "type": "boolean"
+          },
+          "limit_time_enabled": {
+            "type": "boolean"
+          },
+          "timeout_hours": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 24
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebRunPreferencesResponse": {
+        "type": "object",
+        "required": [
+          "run_preferences"
+        ],
+        "properties": {
+          "run_preferences": {
+            "$ref": "#/components/schemas/WebRunPreferences"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebRunPreferencesSaveRequest": {
+        "type": "object",
+        "required": [
+          "run_preferences"
+        ],
+        "properties": {
+          "run_preferences": {
+            "$ref": "#/components/schemas/WebRunPreferences"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetScope": {
+        "type": "string",
+        "enum": [
+          "finder",
+          "common"
+        ]
+      },
+      "WebPresetKind": {
+        "type": "string",
+        "enum": [
+          "user",
+          "system"
+        ],
+        "default": "user"
+      },
+      "WebPresetMetadata": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "label",
+          "enabled_count",
+          "total_count",
+          "updated_at"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WebPresetKind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "enabled_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetMetadataScope": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/WebPresetMetadata"
+        }
+      },
+      "WebPresetMetadataMap": {
+        "type": "object",
+        "required": [
+          "finder",
+          "common"
+        ],
+        "properties": {
+          "finder": {
+            "$ref": "#/components/schemas/WebPresetMetadataScope"
+          },
+          "common": {
+            "$ref": "#/components/schemas/WebPresetMetadataScope"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetDomainMapScope": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "WebPresetDomainMap": {
+        "type": "object",
+        "required": [
+          "finder",
+          "common"
+        ],
+        "properties": {
+          "finder": {
+            "$ref": "#/components/schemas/WebPresetDomainMapScope"
+          },
+          "common": {
+            "$ref": "#/components/schemas/WebPresetDomainMapScope"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebBuiltinPresetSource": {
+        "type": "object",
+        "required": [
+          "type",
+          "source",
+          "coverage_note",
+          "key",
+          "url"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "coverage_note": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetsResponse": {
+        "type": "object",
+        "required": [
+          "metadata",
+          "system_metadata",
+          "system",
+          "custom",
+          "domain_sets",
+          "builtin"
+        ],
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/WebPresetMetadataMap"
+          },
+          "system_metadata": {
+            "$ref": "#/components/schemas/WebPresetMetadataMap"
+          },
+          "system": {
+            "$ref": "#/components/schemas/WebPresetDomainMap"
+          },
+          "custom": {
+            "$ref": "#/components/schemas/WebPresetDomainMap"
+          },
+          "domain_sets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "builtin": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WebBuiltinPresetSource"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetSaveRequest": {
+        "type": "object",
+        "required": [
+          "scope",
+          "name",
+          "domains"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/WebPresetScope"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WebPresetKind"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetDeleteUserListsRequest": {
+        "type": "object",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/WebPresetScope"
+          },
+          "names": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "names"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "WebPresetDomainItem": {
+        "type": "object",
+        "required": [
+          "domain",
+          "position",
+          "enabled"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebPresetDomainsResponse": {
+        "type": "object",
+        "required": [
+          "scope",
+          "name",
+          "kind",
+          "query",
+          "limit",
+          "offset",
+          "total",
+          "has_more",
+          "domains"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebPresetDomainItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StrategyCandidateFilters": {
+        "type": "object",
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "strategy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "protocols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source_modes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "single_domain",
+                "multi_domain"
+              ]
+            }
+          },
+          "families": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceActionResult": {
+        "type": "object",
+        "required": [
+          "status",
+          "operation_id",
+          "storage"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/V2flyStorageStatus"
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "examples": {
+      "CoreStatusIdle": {
+        "summary": "Сервис свободен и готов к запуску подбора",
+        "value": {
+          "state": "idle",
+          "storage": {
+            "ready": true,
+            "schema_version": 11,
+            "state_dir": "/home/pi/gp/state"
+          },
+          "updated_at": "2026-07-22T17:30:00Z"
+        }
+      },
+      "CoreStatusRunning": {
+        "summary": "Сейчас идет подбор стратегий",
+        "value": {
+          "state": "running",
+          "current_run": {
+            "run_id": "run_20260722_173000",
+            "status": "running"
+          },
+          "storage": {
+            "ready": true,
+            "schema_version": 11,
+            "state_dir": "/home/pi/gp/state"
+          },
+          "updated_at": "2026-07-22T17:40:00Z"
+        }
+      },
+      "StartRunRequestMultiDomain": {
+        "summary": "Подбор для конкретных доменов с 30 curl в параллель",
+        "value": {
+          "mode": "multi_domain",
+          "domains": [
+            "youtube.com",
+            "discord.com",
+            "airhorn.solutions"
+          ],
+          "protocols": [
+            "tcp",
+            "quic"
+          ],
+          "curl_parallelism": 30,
+          "timeout_seconds": 172800,
+          "settings": {
+            "curl_max_time": 7,
+            "curl_max_time_quic": 7,
+            "enable_ipv6": false
+          }
+        }
+      },
+      "WebRunPreferencesResponse": {
+        "summary": "Saved Web UI run form state",
+        "value": {
+          "run_preferences": {
+            "domains": [
+              "youtube.com",
+              "discord.com"
+            ],
+            "domain_preset": "system:required",
+            "discovery_profile": "standard",
+            "run_mode": "multi",
+            "curl_parallelism": 30,
+            "enable_http": false,
+            "enable_tls12": true,
+            "enable_tls13": false,
+            "include_quic": true,
+            "enable_ipv6": false,
+            "scan_level": "standard",
+            "repeats": 1,
+            "repeat_parallel": false,
+            "skip_dnscheck": true,
+            "skip_ipblock": true,
+            "limit_time_enabled": true,
+            "timeout_hours": 48
+          }
+        }
+      },
+      "WebRunPreferencesSaveRequest": {
+        "summary": "Save Web UI run form state",
+        "value": {
+          "run_preferences": {
+            "domains": [
+              "youtube.com",
+              "discord.com"
+            ],
+            "domain_preset": "system:required",
+            "discovery_profile": "standard",
+            "run_mode": "multi",
+            "curl_parallelism": 30,
+            "enable_http": false,
+            "enable_tls12": true,
+            "enable_tls13": false,
+            "include_quic": true,
+            "enable_ipv6": false,
+            "scan_level": "standard",
+            "repeats": 1,
+            "repeat_parallel": false,
+            "skip_dnscheck": true,
+            "skip_ipblock": true,
+            "limit_time_enabled": true,
+            "timeout_hours": 48
+          }
+        }
+      },
+      "WebPresetsResponse": {
+        "summary": "Web UI preset metadata and built-in domain sets",
+        "value": {
+          "metadata": {
+            "finder": {
+              "work": {
+                "name": "work",
+                "kind": "user",
+                "label": "work",
+                "enabled_count": 2,
+                "total_count": 2,
+                "updated_at": ""
+              }
+            },
+            "common": {}
+          },
+          "system_metadata": {
+            "finder": {
+              "required": {
+                "name": "required",
+                "kind": "system",
+                "label": "Обязательные домены",
+                "enabled_count": 2,
+                "total_count": 2,
+                "updated_at": ""
+              },
+              "desired": {
+                "name": "desired",
+                "kind": "system",
+                "label": "Желательные домены",
+                "enabled_count": 1,
+                "total_count": 1,
+                "updated_at": ""
+              }
+            },
+            "common": {}
+          },
+          "system": {
+            "finder": {
+              "required": [
+                "youtube.com",
+                "discord.com"
+              ],
+              "desired": [
+                "instagram.com"
+              ]
+            },
+            "common": {}
+          },
+          "custom": {
+            "finder": {
+              "work": [
+                "slack.com",
+                "notion.so"
+              ]
+            },
+            "common": {}
+          },
+          "domain_sets": {
+            "critical": [
+              "youtube.com",
+              "discord.com"
+            ],
+            "discord": [
+              "discord.com"
+            ]
+          },
+          "builtin": {
+            "critical": {
+              "type": "manual",
+              "source": "gp-control-plane built-in preset",
+              "coverage_note": "Curated list used by GP control plane.",
+              "key": "critical",
+              "url": "src/gp_control_plane/strategy_finder.py"
+            }
+          }
+        }
+      },
+      "WebPresetDomainsResponse": {
+        "summary": "Paginated domains for one Web UI preset",
+        "value": {
+          "scope": "finder",
+          "name": "required",
+          "kind": "system",
+          "query": "you",
+          "limit": 200,
+          "offset": 0,
+          "total": 2,
+          "has_more": false,
+          "domains": [
+            {
+              "domain": "youtube.com",
+              "position": 0,
+              "enabled": true
+            },
+            {
+              "domain": "ytimg.com",
+              "position": 1,
+              "enabled": true
+            }
+          ]
+        }
+      },
+      "WebPresetSaveRequest": {
+        "summary": "Save one Web UI preset domain list",
+        "value": {
+          "scope": "finder",
+          "name": "work",
+          "kind": "user",
+          "domains": [
+            "slack.com",
+            "notion.so",
+            "figma.com"
+          ]
+        }
+      },
+      "WebPresetDeleteUserListsRequest": {
+        "summary": "Delete selected Web UI user preset lists",
+        "value": {
+          "scope": "finder",
+          "names": [
+            "work",
+            "games"
+          ]
+        }
+      },
+      "RunAccepted": {
+        "summary": "Задача принята в работу",
+        "value": {
+          "accepted": true,
+          "run_id": "run_20260722_173000",
+          "status": "queued"
+        }
+      },
+      "BackupRestoreAccepted": {
+        "summary": "Резервная копия восстановлена синхронно",
+        "value": {
+          "accepted": true,
+          "status": "success",
+          "snapshot_id": "backup_20260722_173005"
+        }
+      },
+      "RunProgressRunning": {
+        "summary": "Прогресс активного подбора",
+        "value": {
+          "run_id": "run_20260722_173000",
+          "status": "running",
+          "stage": "strategy_discovery",
+          "current_file": "50-fake-multi.sh",
+          "domains_total": 70,
+          "domains_processed": 18,
+          "attempts_total": 4200,
+          "attempts_processed": 1080,
+          "strategies_total": 60,
+          "strategies_processed": 15,
+          "elapsed_seconds": 75600,
+          "eta_seconds": 218400,
+          "avg_attempt_seconds": 70
+        }
+      },
+      "RunProgressIdle": {
+        "summary": "Подбор не запущен",
+        "value": {
+          "status": "idle"
+        }
+      },
+      "RunLogTail": {
+        "summary": "Последние строки лога подбора",
+        "value": {
+          "run_id": "run_20260722_173000",
+          "kind": "multi-domain-discovery",
+          "status": "running",
+          "stdout_tail": "checking youtube.com with 50-fake-multi.sh\nprogress attempts=1080/4200",
+          "stdout_append": "",
+          "stderr_tail": "",
+          "stderr_append": "",
+          "stderr_diagnostics": [],
+          "stdout_log": "/home/pi/gp/state/strategy-finder/logs/run_20260722_173000.stdout.log",
+          "stderr_log": "/home/pi/gp/state/strategy-finder/logs/run_20260722_173000.stderr.log",
+          "stdout_size": 8192,
+          "stderr_size": 0,
+          "progress": {
+            "phase": "running",
+            "attempted": 1080,
+            "attempt_total": 4200,
+            "eta_seconds": 3600
+          },
+          "metrics": {
+            "run_id": "run_20260722_173000",
+            "attempted": 1080,
+            "attempt_total": 4200
+          },
+          "run_settings": {
+            "domain_count": 3,
+            "curl_parallelism": 30,
+            "timeout_seconds": 172800
+          }
+        }
+      },
+      "PreflightStatusReady": {
+        "summary": "Все условия для подбора выполнены",
+        "value": {
+          "ready": true,
+          "checks": [
+            {
+              "name": "zapret2",
+              "status": "ok",
+              "message": "zapret2 installed",
+              "details": {
+                "path": "/opt/zapret2"
+              }
+            },
+            {
+              "name": "v2fly",
+              "status": "ok",
+              "message": "local storage ready",
+              "details": {
+                "groups": 1890
+              }
+            }
+          ]
+        }
+      },
+      "DomainListsResponse": {
+        "summary": "Обязательный, желательный и пользовательский списки",
+        "value": {
+          "lists": [
+            {
+              "list_id": "builtin:required",
+              "kind": "required",
+              "name": "Обязательные",
+              "domains": [
+                "youtube.com",
+                "discord.com"
+              ],
+              "updated_at": "2026-07-22T17:00:00Z"
+            },
+            {
+              "list_id": "builtin:desired",
+              "kind": "desired",
+              "name": "Желательные",
+              "domains": [
+                "instagram.com",
+                "tiktok.com"
+              ],
+              "updated_at": "2026-07-22T17:00:00Z"
+            },
+            {
+              "list_id": "user:work",
+              "kind": "user",
+              "name": "Рабочие сервисы",
+              "domains": [
+                "slack.com",
+                "notion.so"
+              ],
+              "updated_at": "2026-07-22T17:05:00Z"
+            }
+          ]
+        }
+      },
+      "SaveDomainListRequest": {
+        "summary": "Сохранить пользовательский список доменов",
+        "value": {
+          "kind": "user",
+          "name": "Рабочие сервисы",
+          "domains": [
+            "slack.com",
+            "notion.so",
+            "figma.com"
+          ]
+        }
+      },
+      "SaveRequiredDomainListRequest": {
+        "summary": "Обновить обязательный список",
+        "value": {
+          "kind": "required",
+          "name": "Обязательные",
+          "domains": [
+            "youtube.com",
+            "discord.com"
+          ]
+        }
+      },
+      "DomainList": {
+        "summary": "Сохраненный список доменов",
+        "value": {
+          "list_id": "user:work",
+          "kind": "user",
+          "name": "Рабочие сервисы",
+          "domains": [
+            "slack.com",
+            "notion.so",
+            "figma.com"
+          ],
+          "updated_at": "2026-07-22T17:10:00Z"
+        }
+      },
+      "DeleteDomainListRequest": {
+        "summary": "Удалить выбранные пользовательские списки",
+        "value": {
+          "list_ids": [
+            "user:work",
+            "user:games"
+          ]
+        }
+      },
+      "DeleteResult": {
+        "summary": "Удалена одна сущность",
+        "value": {
+          "deleted": 1
+        }
+      },
+      "V2flyCategoriesResponse": {
+        "summary": "Категории из локального v2fly-хранилища",
+        "value": {
+          "categories": [
+            {
+              "name": "geolocation-!cn",
+              "domain_count": 48211
+            },
+            {
+              "name": "youtube",
+              "domain_count": 128
+            },
+            {
+              "name": "discord",
+              "domain_count": 44
+            }
+          ],
+          "storage": {
+            "state": "ready",
+            "source_repo": "v2fly/domain-list-community",
+            "source_ref": "master",
+            "source_commit": "abc1234",
+            "prepared_at": "2026-07-22T16:00:00Z",
+            "group_count": 1890
+          }
+        }
+      },
+      "V2flyCategoryDomainsResponse": {
+        "summary": "Домены одной категории v2fly",
+        "value": {
+          "category": "youtube",
+          "domains": [
+            "youtube.com",
+            "ytimg.com",
+            "googlevideo.com"
+          ],
+          "storage": {
+            "state": "ready",
+            "source_repo": "v2fly/domain-list-community",
+            "source_ref": "master",
+            "source_commit": "abc1234",
+            "prepared_at": "2026-07-22T16:00:00Z",
+            "group_count": 1890
+          }
+        }
+      },
+      "BackupSnapshot": {
+        "summary": "Созданный бэкап",
+        "value": {
+          "snapshot_id": "snapshot_20260722_173000",
+          "created_at": "2026-07-22T17:30:00Z",
+          "schema_version": "1",
+          "filename": "snapshot_20260722_173000.zip",
+          "size_bytes": 184320,
+          "checksum": "sha256:7b1f8c...",
+          "entity_counts": {
+            "domains": 70,
+            "strategies": 1530,
+            "strategy_domain_links": 7063,
+            "domain_lists": 3,
+            "settings": 1
+          }
+        }
+      },
+      "BackupsResponse": {
+        "summary": "Список локальных бэкапов",
+        "value": {
+          "backups": [
+            {
+              "snapshot_id": "snapshot_20260722_173000",
+              "created_at": "2026-07-22T17:30:00Z",
+              "schema_version": "1",
+              "filename": "snapshot_20260722_173000.zip",
+              "size_bytes": 184320,
+              "checksum": "sha256:7b1f8c...",
+              "entity_counts": {
+                "domains": 70,
+                "strategies": 1530,
+                "strategy_domain_links": 7063,
+                "domain_lists": 3,
+                "settings": 1
+              }
+            }
+          ]
+        }
+      },
+      "BackupActionRequest": {
+        "summary": "Выбрать бэкап для действия",
+        "value": {
+          "snapshot_id": "snapshot_20260722_173000"
+        }
+      },
+      "CleanInstallVaultCreateResponse": {
+        "summary": "Создан pending device-local vault с публичными метаданными",
+        "value": {
+          "vault_id": "4f2a9c8e1b3d6a7f0c5e2d9b8a1f4c6e",
+          "archive_sha256": "b8e91ca19265dadfac3a4db5f2865d93d9423d6e07c510e1615cf824bd2e2db3",
+          "archive_size_bytes": 184320,
+          "schema_version": "7",
+          "semantic_manifest": {"domains": 2, "strategies": 1, "history": 1, "settings": 1}
+        }
+      },
+      "CleanInstallVaultListResponse": {
+        "summary": "Список pending vault с публичными метаданными",
+        "value": {
+          "vaults": [
+            {
+              "vault_id": "4f2a9c8e1b3d6a7f0c5e2d9b8a1f4c6e",
+              "created_at": "2026-08-21T12:00:00Z",
+              "schema_version": "7",
+              "archive_sha256": "b8e91ca19265dadfac3a4db5f2865d93d9423d6e07c510e1615cf824bd2e2db3",
+              "archive_size_bytes": 184320,
+              "verification": "pending",
+              "pending": true
+            }
+          ]
+        }
+      },
+      "CleanInstallVaultStatus": {
+        "summary": "Публичный статус pending vault",
+        "value": {
+          "vault_id": "4f2a9c8e1b3d6a7f0c5e2d9b8a1f4c6e",
+          "created_at": "2026-08-21T12:00:00Z",
+          "schema_version": "7",
+          "archive_sha256": "b8e91ca19265dadfac3a4db5f2865d93d9423d6e07c510e1615cf824bd2e2db3",
+          "archive_size_bytes": 184320,
+          "verification": "pending",
+          "pending": true
+        }
+      },
+      "CleanInstallVaultRestoreRequest": {
+        "summary": "Восстановить выбранный vault после явного подтверждения",
+        "value": {
+          "vault_id": "4f2a9c8e1b3d6a7f0c5e2d9b8a1f4c6e",
+          "confirm_restore": true
+        }
+      },
+      "CleanInstallVaultRestoreResponse": {
+        "summary": "Данные проверены и source vault удален",
+        "value": {
+          "completed": true,
+          "vault_id": "4f2a9c8e1b3d6a7f0c5e2d9b8a1f4c6e",
+          "verification": {"verified": true, "integrity_check": "ok"},
+          "storage_status": {"ready": true, "integrity_check": "ok"},
+          "cleanup": {"completed": true, "source_deleted": true}
+        }
+      },
+      "RunSettings": {
+        "summary": "Настройки запуска подбора",
+        "value": {
+          "curl_parallelism_default": 10,
+          "curl_parallelism_max": 50,
+          "curl_max_time": 7,
+          "curl_max_time_quic": 7,
+          "curl_max_time_doh": 10,
+          "enable_ipv6": false,
+          "debug_stdout": false
+        }
+      },
+      "RunHistoryResponse": {
+        "summary": "История запусков без UI-пагинации",
+        "value": {
+          "runs": [
+            {
+              "run_id": "run_20260722_173000",
+              "mode": "multi_domain",
+              "status": "success",
+              "started_at": "2026-07-22T17:30:00Z",
+              "completed_at": "2026-07-22T19:10:00Z",
+              "domains": [
+                "youtube.com",
+                "discord.com"
+              ],
+              "settings": {
+                "curl_parallelism": 30
+              },
+              "summary": {
+                "matched_domains": 2,
+                "candidates": 14
+              }
+            }
+          ]
+        }
+      },
+      "StrategyCandidatesResponse": {
+        "summary": "Фильтрованные нормализованные кандидаты стратегий",
+        "value": {
+          "candidates": [
+            {
+              "id": "tcp-5e8f1a2b3c4d",
+              "protocol": "tcp",
+              "args": "--dpi-desync=fake,multisplit --dpi-desync-split-pos=1",
+              "status": "candidate",
+              "first_seen_at": "2026-07-22T17:30:00Z",
+              "last_seen_at": "2026-07-22T17:45:00Z",
+              "fragmentation_class": "position_safe",
+              "fragmentation_safe": true,
+              "fragmentation_reason": "split position does not fragment ClientHello",
+              "family": "fake-multi",
+              "family_key": "fake-multi:tcp",
+              "family_rank": 50,
+              "family_reason": "strategy family parsed from args",
+              "seen": [
+                {
+                  "run_id": "",
+                  "domain": "youtube.com",
+                  "test": "",
+                  "ip_version": "",
+                  "seen_at": ""
+                }
+              ],
+              "common_seen": [
+                {
+                  "domains": [
+                    "youtube.com",
+                    "discord.com"
+                  ]
+                }
+              ]
+            }
+          ],
+          "total": 1,
+          "filters": {
+            "domains": [
+              "youtube.com"
+            ]
+          }
+        }
+      },
+      "CoreEventsResponse": {
+        "summary": "Core events after the requested cursor",
+        "value": {
+          "events": [
+            {
+              "event_id": "core:000000000123",
+              "type": "strategy-discovery.progress",
+              "created_at": "2026-07-22T17:40:00Z",
+              "payload": {
+                "run_id": "run_20260722_173000",
+                "status": "running",
+                "stage": "selection",
+                "attempts_processed": 1080,
+                "attempts_total": 4200
+              }
+            }
+          ],
+          "next_after_id": "core:000000000123"
+        }
+      },
+      "WebEventsResponse": {
+        "summary": "Web UI events after the requested cursor",
+        "value": {
+          "events": [
+            {
+              "event_id": "web:000000000123",
+              "type": "runs",
+              "created_at": "2026-07-22T17:40:00Z",
+              "payload": {
+                "count": 20,
+                "version": "sha256:184a7f8fd2b0"
+              }
+            }
+          ],
+          "next_after_id": "web:000000000123"
+        }
+      },
+      "WebEventsStream": {
+        "summary": "Server-sent Web UI event stream",
+        "value": "event: status\ndata: {\"state\":\"idle\",\"version\":{\"version\":\"0.4.4\"}}\n\nevent: presets\ndata: {\"version\":\"sha256:184a7f8fd2b0\"}\n\n: keepalive\n\n"
+      },
+      "ServiceStatus": {
+        "summary": "Состояние установленного сервиса",
+        "value": {
+          "state": "active",
+          "mode": "core",
+          "services": {
+            "core": {
+              "name": "gp-control-plane-core.service",
+              "state": "active",
+              "role": "current",
+              "required": true
+            },
+            "web": {
+              "name": "gp-control-plane-web.service",
+              "state": "unknown",
+              "role": "proxy",
+              "required": true
+            }
+          },
+          "version": {
+            "version": "0.4.4",
+            "installed_ref": "v0.4.4",
+            "commit": "0123456789abcdef0123456789abcdef01234567"
+          },
+          "data_state": {
+            "state": "ready",
+            "state_dir": "/home/balbomush/gp/GP-access-control-plane/build/state",
+            "v2fly": {
+              "state": "ready",
+              "source_commit": "abc1234",
+              "group_count": 1890
+            }
+          },
+          "updated_at": "2026-07-22T17:30:00Z"
+        }
+      },
+      "AvailableReleases": {
+        "summary": "Доступные релизы",
+        "value": {
+          "current": {
+            "version": "0.4.4",
+            "installed_ref": "v0.4.4",
+            "commit": "0123456789abcdef0123456789abcdef01234567"
+          },
+          "releases": [
+            {
+              "version": "0.3.4",
+              "channel": "stable",
+              "ref": "v0.3.4",
+              "url": "https://github.com/balbomush/GP-access-control-plane/releases/tag/v0.3.4",
+              "published_at": "2026-07-19T12:00:00Z"
+            },
+            {
+              "version": "0.4.0",
+              "channel": "stable",
+              "ref": "v0.4.0",
+              "url": "https://github.com/balbomush/GP-access-control-plane/releases/tag/v0.4.0",
+              "published_at": "2026-07-19T18:00:00Z"
+            }
+          ],
+          "stable_release_url": "https://github.com/balbomush/GP-access-control-plane/releases/latest",
+          "prerelease_url": "https://github.com/balbomush/GP-access-control-plane/releases"
+        }
+      },
+      "V2flyStorageStatus": {
+        "summary": "Локальное v2fly-хранилище готово",
+        "value": {
+          "state": "ready",
+          "source_repo": "v2fly/domain-list-community",
+          "source_ref": "master",
+          "source_commit": "abc1234",
+          "prepared_at": "2026-07-22T16:00:00Z",
+          "group_count": 1890,
+          "archive_sha256": "sha256:9d8a...",
+          "catalog_sha256": "sha256:f4b2...",
+          "last_update_check": {
+            "checked_at": "2026-07-22T17:00:00Z",
+            "has_updates": false
+          }
+        }
+      },
+      "PagedCandidateDomainIndexResponse": {
+        "summary": "Web UI candidate domain index page",
+        "value": {
+          "domains": [
+            {
+              "domain": "youtube.com",
+              "strategy_count": 58,
+              "protocols": [
+                {
+                  "protocol": "tcp",
+                  "count": 42
+                },
+                {
+                  "protocol": "quic",
+                  "count": 16
+                }
+              ]
+            }
+          ],
+          "total": 70,
+          "strategy_total": 1530,
+          "limit": 50,
+          "offset": 0,
+          "has_more": true,
+          "tested_domains": [
+            "youtube.com",
+            "discord.com"
+          ],
+          "version": {
+            "strategy_count": 1530,
+            "result_count": 7063,
+            "domain_count": 70
+          }
+        }
+      },
+      "PagedRunHistoryResponse": {
+        "summary": "Страница истории запусков для Web UI",
+        "value": {
+          "runs": [
+            {
+              "run_id": "run_20260722_173000",
+              "mode": "multi_domain",
+              "status": "running",
+              "started_at": "2026-07-22T17:30:00Z",
+              "domains": [
+                "youtube.com",
+                "discord.com"
+              ],
+              "settings": {
+                "curl_parallelism": 30
+              },
+              "summary": {
+                "attempts_processed": 1080
+              }
+            }
+          ],
+          "limit": 50,
+          "offset": 0,
+          "total": 124,
+          "has_more": true
+        }
+      },
+      "PagedStrategyCandidatesResponse": {
+        "summary": "Страница кандидатов стратегий для Web UI",
+        "value": {
+          "candidates": [
+            {
+              "id": "tcp-5e8f1a2b3c4d",
+              "protocol": "tcp",
+              "args": "--dpi-desync=fake,multisplit --dpi-desync-split-pos=1",
+              "status": "candidate",
+              "first_seen_at": "2026-07-22T17:30:00Z",
+              "last_seen_at": "2026-07-22T17:45:00Z",
+              "fragmentation_class": "position_safe",
+              "fragmentation_safe": true,
+              "fragmentation_reason": "split position does not fragment ClientHello",
+              "family": "fake-multi",
+              "family_key": "fake-multi:tcp",
+              "family_rank": 50,
+              "family_reason": "strategy family parsed from args",
+              "seen": [
+                {
+                  "domain": "youtube.com"
+                }
+              ],
+              "common_seen": [
+                {
+                  "domains": [
+                    "youtube.com",
+                    "discord.com"
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": 50,
+          "offset": 0,
+          "total": 7063,
+          "has_more": true
+        }
+      },
+      "ErrorResponse": {
+        "summary": "Простая ошибка",
+        "value": {
+          "error": {"code": "invalid_request", "message": "The request is invalid.", "details": {}}
+        }
+      },
+      "ServiceActionResult": {
+        "summary": "Синхронное сервисное действие выполнено",
+        "value": {
+          "status": "success",
+          "operation_id": "v2fly-check-updates",
+          "storage": {
+            "state": "ready",
+            "source_repo": "v2fly/domain-list-community",
+            "source_ref": "master",
+            "source_commit": "abc1234",
+            "prepared_at": "2026-07-22T16:00:00Z",
+            "group_count": 1890,
+            "archive_sha256": "sha256:9d8a...",
+            "catalog_sha256": "sha256:f4b2...",
+            "last_update_check": {
+              "checked_at": "2026-07-22T17:00:00Z",
+              "has_updates": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-gp-contract-stage": "alpha-split-no-legacy-root-apis",
+  "x-gp-decisions": {
+    "runtime": "web-service-proxies-api-to-local-core-service",
+    "legacy_api_compatibility": "legacy-root-apis-removed-in-alpha",
+    "web_ui_install_default": "install",
+    "headless_install": "explicit-opt-out-from-web-ui"
+  }
+}

@@ -1,0 +1,1270 @@
+{
+  "source_sha": "66b5898d6c30544df00d928126ecc5a38ea6fffc",
+  "provenance": "Released v0.4.4; source-derived inventory, observed HTTP results recorded separately.",
+  "openapi_sha256": "2487334c7f896b9f8cfe574830db07813c6bd437e445de45c7c9b42f9f84bedd",
+  "public_routes": [
+    {
+      "path": "/",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "web",
+      "dispatch": "html",
+      "openapi": false,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": false
+    },
+    {
+      "path": "/openapi.json",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "openapi",
+      "dispatch": "openapi-json",
+      "openapi": false,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": false
+    },
+    {
+      "path": "/swagger",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "openapi",
+      "dispatch": "swagger-ui",
+      "openapi": false,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": false
+    },
+    {
+      "path": "/swagger/",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "openapi",
+      "dispatch": "swagger-ui",
+      "openapi": false,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": false
+    },
+    {
+      "path": "/api/health",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "auth",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": false,
+      "effective_bearer_required": false
+    },
+    {
+      "path": "/api/auth/login",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "auth",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": false,
+      "effective_bearer_required": false
+    },
+    {
+      "path": "/api/auth/change-password",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "auth",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/status",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-discovery/start-run",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-discovery/stop-current-run",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-discovery/current-run-progress",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-discovery/current-run-latest-log",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-discovery/preflight",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/presets/domain-lists",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/presets/save-domain-list",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/presets/delete-user-domain-list",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/presets/v2fly/categories",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/presets/v2fly/category-domains",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/backups/create",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/backups/list",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/backups/restore",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/backups/delete",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/backups/download-archive",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "download",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/backups/upload",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "upload",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/clean-install-vaults/create",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/clean-install-vaults/list",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/clean-install-vaults/status",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/clean-install-vaults/restore",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/run-settings",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/run-settings/save",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "core",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/runs/history",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/runs/latest-log",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-candidates",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/strategy-candidates/export",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "core",
+      "dispatch": "ndjson-stream",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/core/events",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "core",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/service/status",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "service",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/service/releases/available",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "service",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/service/v2fly/local-storage-status",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "service",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/service/v2fly/check-updates",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "service",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/service/v2fly/update-local-storage",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "service",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": true,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/status",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/run-preferences",
+      "methods": [
+        "GET",
+        "HEAD",
+        "POST"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get-post",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/runs/history-page",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/candidate-domain-index-page",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/strategy-candidates-page",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/presets",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/presets/domains",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/presets/save",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "web",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/presets/delete-user-lists",
+      "methods": [
+        "POST"
+      ],
+      "namespace": "web",
+      "dispatch": "json-post",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/events",
+      "methods": [
+        "GET"
+      ],
+      "namespace": "web",
+      "dispatch": "json-get",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    },
+    {
+      "path": "/api/web/events/stream",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "namespace": "web",
+      "dispatch": "sse",
+      "openapi": true,
+      "allowed_in_core": false,
+      "auth_required": true,
+      "effective_bearer_required": true
+    }
+  ],
+  "core_internal": {
+    "verify_bearer": "/api/internal/auth/verify-bearer",
+    "events_snapshot": "/api/internal/web-events/snapshot",
+    "events_stream": "/api/internal/web-events/stream",
+    "views": {
+      "/api/web/status": "/api/internal/web-views/status",
+      "/api/web/run-preferences": "/api/internal/web-views/run-preferences",
+      "/api/web/runs/history-page": "/api/internal/web-views/runs-history-page",
+      "/api/web/candidate-domain-index-page": "/api/internal/web-views/candidate-domain-index-page",
+      "/api/web/strategy-candidates-page": "/api/internal/web-views/strategy-candidates-page",
+      "/api/web/presets": "/api/internal/web-views/presets",
+      "/api/web/presets/domains": "/api/internal/web-views/preset-domains",
+      "/api/web/presets/save": "/api/internal/web-views/preset-save",
+      "/api/web/presets/delete-user-lists": "/api/internal/web-views/preset-delete-user-lists"
+    },
+    "get_views": [
+      "/api/internal/web-views/candidate-domain-index-page",
+      "/api/internal/web-views/preset-domains",
+      "/api/internal/web-views/presets",
+      "/api/internal/web-views/run-preferences",
+      "/api/internal/web-views/runs-history-page",
+      "/api/internal/web-views/status",
+      "/api/internal/web-views/strategy-candidates-page"
+    ],
+    "post_views": [
+      "/api/internal/web-views/preset-delete-user-lists",
+      "/api/internal/web-views/preset-save",
+      "/api/internal/web-views/run-preferences"
+    ]
+  },
+  "limits": {
+    "RASPBERRY_PI2_CORE_RSS_BUDGET_MB": 180,
+    "RASPBERRY_PI2_WEB_PROXY_RSS_BUDGET_MB": 120,
+    "RASPBERRY_PI2_COMBINED_RSS_BUDGET_MB": 300,
+    "RASPBERRY_PI2_CURL_PARALLELISM_SAFE_MAX": 10,
+    "BACKUP_UPLOAD_MAX_BYTES": 67108864,
+    "BACKUP_STREAM_CHUNK_BYTES": 262144,
+    "JSON_REQUEST_MAX_BYTES": 1048576,
+    "PROXY_STREAM_CHUNK_BYTES": 65536,
+    "DIAGNOSTICS_RESPONSE_BUDGET_BYTES": 262144,
+    "DIAGNOSTICS_INCLUDE_HOST_METRICS": false
+  },
+  "source_inputs": {
+    "openapi.json": "2487334c7f896b9f8cfe574830db07813c6bd437e445de45c7c9b42f9f84bedd",
+    "src/gp_control_plane/web/routes.py": "337f73dc556e2fc998649e344885ede012122762b819a2c5d822762e739b22a0",
+    "src/gp_control_plane/application/web_view_contracts.py": "79e6ff0abf7e5651542b704d4fb4018fb7fb5bd756b46c636720209732be5f07",
+    "src/gp_control_plane/web/core_app.py": "868ff084be5614f5e8818d6d7aac15c679da80f1bc4e0812c0b3db83ecc40efa",
+    "src/gp_control_plane/web/web_app.py": "24af6ab7a04899b02f56618a904aea74e5b69680c39c9bf48688b6ca1a8b9d9a",
+    "src/gp_control_plane/auth.py": "cbd104f2c616aeae71950638fc1c7aead16d1cedab7c2956d533af504e16e8f9",
+    "src/gp_control_plane/resource_budget.py": "846902754db0b3ba7ad7684e716f9cf179d2b0f588cde624ee7a54ec0c73039c"
+  },
+  "literal_ui_actions": {
+    "${esc(action)}": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:360"
+    ],
+    "logout": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:983",
+      "src/gp_control_plane/web/ui_assets/templates/shell.html:12"
+    ],
+    "open-log": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:994",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:288",
+      "src/gp_control_plane/web/ui_assets/scripts/terminal-controller.js:150"
+    ],
+    "open-candidates": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:1000",
+      "src/gp_control_plane/web/ui_assets/scripts/terminal-controller.js:151"
+    ],
+    "restore": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:221"
+    ],
+    "delete": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:222"
+    ],
+    "upload": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:223"
+    ],
+    "refresh-backups": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:286",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:88"
+    ],
+    "create-backup": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:294",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:165",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:89"
+    ],
+    "upload-backup": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:318",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:166",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:100"
+    ],
+    "copy-candidate-result": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:291",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1008"
+    ],
+    "export-candidate-result": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:292",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1016"
+    ],
+    "use-candidate-result-domains": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:293",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1024"
+    ],
+    "open-candidate-result": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:294",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1032"
+    ],
+    "build-candidate-result": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1000",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:42"
+    ],
+    "refresh": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1040"
+    ],
+    "load-more-candidates": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1055"
+    ],
+    "load-more-candidate-domains": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1063"
+    ],
+    "add-common-domain": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1071",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:31"
+    ],
+    "run-selected-discovery": [
+      "src/gp_control_plane/web/ui_assets/scripts/finder-controller.js:464",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:159",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:132"
+    ],
+    "stop-current": [
+      "src/gp_control_plane/web/ui_assets/scripts/finder-controller.js:469",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:183",
+      "src/gp_control_plane/web/ui_assets/scripts/terminal-controller.js:149",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:133",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/terminal.html:7"
+    ],
+    "repeat-last-run": [
+      "src/gp_control_plane/web/ui_assets/scripts/history-controller.js:416",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:287"
+    ],
+    "load-more-runs": [
+      "src/gp_control_plane/web/ui_assets/scripts/history-controller.js:426"
+    ],
+    "v2fly-select-category": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:551",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1055"
+    ],
+    "v2fly-load-categories": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:554",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1039",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:174",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:178",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:63"
+    ],
+    "v2fly-update-local-storage": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:557",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1047",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:175",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:178",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:64"
+    ],
+    "preset-editor-delete": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:611",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1095",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:170",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:26"
+    ],
+    "v2fly-preview": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1071",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:172",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:77"
+    ],
+    "v2fly-import": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1079",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:173",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:78"
+    ],
+    "preset-editor-save": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1087",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:169",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:24"
+    ],
+    "preset-editor-export": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1103",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:25"
+    ],
+    "preset-new-save": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1111",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:171",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:42"
+    ],
+    "check-releases": [
+      "src/gp_control_plane/web/ui_assets/scripts/releases-controller.js:114",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:77"
+    ],
+    "save-settings": [
+      "src/gp_control_plane/web/ui_assets/scripts/settings-controller.js:175",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:164",
+      "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:30"
+    ],
+    "copy-diagnostics": [
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:289",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:296"
+    ],
+    "change-password": [
+      "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:50"
+    ]
+  },
+  "dataset_handlers": {
+    "tab": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:366",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:385",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:386",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:991",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:991"
+    ],
+    "candidateView": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:389",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:390",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:32",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:983",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:984"
+    ],
+    "candidateResultMode": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:393",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:394",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:229",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:991",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:992"
+    ],
+    "action": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:981",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:994",
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:1000",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:286",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:294",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:318",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1000",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1008",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1016",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1024",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1032",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1040",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1055",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1063",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1071",
+      "src/gp_control_plane/web/ui_assets/scripts/finder-controller.js:464",
+      "src/gp_control_plane/web/ui_assets/scripts/finder-controller.js:469",
+      "src/gp_control_plane/web/ui_assets/scripts/history-controller.js:416",
+      "src/gp_control_plane/web/ui_assets/scripts/history-controller.js:426",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1039",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1047",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1055",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1071",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1079",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1087",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1095",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1103",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1111",
+      "src/gp_control_plane/web/ui_assets/scripts/releases-controller.js:114",
+      "src/gp_control_plane/web/ui_assets/scripts/settings-controller.js:175",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:178",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:178",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:296"
+    ],
+    "backupRestore": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:987",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:302",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:303"
+    ],
+    "backupDelete": [
+      "src/gp_control_plane/web/ui_assets/scripts/app-shell.js:987",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:310",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:311"
+    ],
+    "backupDownload": [
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:277",
+      "src/gp_control_plane/web/ui_assets/scripts/backups-controller.js:278"
+    ],
+    "commonDomainSuggestion": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:975",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:976"
+    ],
+    "strategyListToggle": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1079",
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1080"
+    ],
+    "strategyRemoteMore": [
+      "src/gp_control_plane/web/ui_assets/scripts/candidates-controller.js:1083"
+    ],
+    "fill": [
+      "src/gp_control_plane/web/ui_assets/scripts/finder-controller.js:459",
+      "src/gp_control_plane/web/ui_assets/scripts/finder-controller.js:459"
+    ],
+    "runRepeat": [
+      "src/gp_control_plane/web/ui_assets/scripts/history-controller.js:408",
+      "src/gp_control_plane/web/ui_assets/scripts/history-controller.js:409"
+    ],
+    "category": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1057"
+    ],
+    "presetSave": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1119",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1120"
+    ],
+    "presetDelete": [
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1127",
+      "src/gp_control_plane/web/ui_assets/scripts/presets-controller.js:1128"
+    ],
+    "tooltip": [
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:180",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:180",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:181",
+      "src/gp_control_plane/web/ui_assets/scripts/status-view-controller.js:181"
+    ]
+  },
+  "form_controls": [
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/bootstrap.html:4",
+      "markup": "<button id=\"boot-retry\" type=\"button\" hidden>Повторить</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/login.html:2",
+      "markup": "<form class=\"login-card l-stack\" id=\"login-form\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/login.html:9",
+      "markup": "<input id=\"login-username\" name=\"username\" autocomplete=\"username\" required>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/login.html:13",
+      "markup": "<input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/login.html:16",
+      "markup": "<button type=\"submit\">Войти</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:12",
+      "markup": "<button class=\"secondary\" data-action=\"logout\" type=\"button\">Выйти</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:22",
+      "markup": "<button class=\"metric metric-button\" data-tab=\"terminal\" id=\"metric-job-card\" type=\"button\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:27",
+      "markup": "<button class=\"metric metric-button\" data-tab=\"candidates\" type=\"button\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:35",
+      "markup": "<button class=\"tab-button active\" id=\"tab-finder\" role=\"tab\" aria-selected=\"true\" aria-controls=\"tab-panel-finder\" data-tab=\"finder\" type=\"button\">Подбор</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:36",
+      "markup": "<button class=\"tab-button\" id=\"tab-history\" role=\"tab\" aria-selected=\"false\" aria-controls=\"tab-panel-history\" data-tab=\"history\" type=\"button\" tabindex=\"-1\">История</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:37",
+      "markup": "<button class=\"tab-button\" id=\"tab-candidates\" role=\"tab\" aria-selected=\"false\" aria-controls=\"tab-panel-candidates\" data-tab=\"candidates\" type=\"button\" tabindex=\"-1\">Кандидаты</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:38",
+      "markup": "<button class=\"tab-button\" id=\"tab-terminal\" role=\"tab\" aria-selected=\"false\" aria-controls=\"tab-panel-terminal\" data-tab=\"terminal\" type=\"button\" tabindex=\"-1\">Терминал</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:39",
+      "markup": "<button class=\"tab-button\" id=\"tab-lists\" role=\"tab\" aria-selected=\"false\" aria-controls=\"tab-panel-lists\" data-tab=\"lists\" type=\"button\" tabindex=\"-1\">Списки и профили</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/shell.html:40",
+      "markup": "<button class=\"tab-button\" id=\"tab-settings\" role=\"tab\" aria-selected=\"false\" aria-controls=\"tab-panel-settings\" data-tab=\"settings\" type=\"button\" tabindex=\"-1\">Настройки</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:9",
+      "markup": "<button class=\"subtab-button active\" id=\"candidate-view-domain\" role=\"tab\" aria-selected=\"true\" aria-controls=\"candidates-table\" data-candidate-view=\"domain\" type=\"button\">По доменам</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:10",
+      "markup": "<button class=\"subtab-button\" id=\"candidate-view-common\" role=\"tab\" aria-selected=\"false\" aria-controls=\"candidates-table\" data-candidate-view=\"common\" type=\"button\" tabindex=\"-1\">Общие стратегии</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:16",
+      "markup": "<select id=\"common-preset-select\"></select>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:23",
+      "markup": "<textarea id=\"common-domains\" class=\"line-numbered-textarea\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"discord.com&#10;discordcdn.com\"></textarea>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:28",
+      "markup": "<input id=\"common-domain-add\" list=\"tested-domain-options\" autocomplete=\"off\" placeholder=\"Начните вводить протестированный домен\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:31",
+      "markup": "<button class=\"secondary\" data-action=\"add-common-domain\" title=\"Добавляет домен в фильтр общих стратегий, если по нему уже есть кандидаты.\" type=\"button\">Добавить домен</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:42",
+      "markup": "<button data-action=\"build-candidate-result\" type=\"button\">Собрать итоговый набор</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:44",
+      "markup": "<button class=\"subtab-button\" id=\"candidate-result-mode-coverage\" role=\"tab\" aria-selected=\"false\" aria-controls=\"candidate-result-body\" data-candidate-result-mode=\"coverage\" type=\"button\" tabindex=\"-1\">Максимум покрытия</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:45",
+      "markup": "<button class=\"subtab-button\" id=\"candidate-result-mode-minimal\" role=\"tab\" aria-selected=\"false\" aria-controls=\"candidate-result-body\" data-candidate-result-mode=\"minimal\" type=\"button\" tabindex=\"-1\">Минимум стратегий</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/candidates.html:46",
+      "markup": "<button class=\"subtab-button active\" id=\"candidate-result-mode-balance\" role=\"tab\" aria-selected=\"true\" aria-controls=\"candidate-result-body\" data-candidate-result-mode=\"balance\" type=\"button\">Баланс</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:14",
+      "markup": "<textarea id=\"finder-domains\" class=\"line-numbered-textarea\" autocomplete=\"off\" spellcheck=\"false\"></textarea>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:20",
+      "markup": "<select id=\"finder-preset-select\"></select>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:29",
+      "markup": "<input type=\"radio\" name=\"run-mode\" value=\"standard\" checked>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:33",
+      "markup": "<input type=\"radio\" name=\"run-mode\" value=\"multi\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:41",
+      "markup": "<input id=\"curl-parallelism\" type=\"number\" min=\"1\" step=\"1\" value=\"4\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:49",
+      "markup": "<input id=\"enable-http\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:53",
+      "markup": "<input id=\"enable-tls12\" type=\"checkbox\" checked>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:57",
+      "markup": "<input id=\"enable-tls13\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:61",
+      "markup": "<input id=\"include-quic\" type=\"checkbox\" checked>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:65",
+      "markup": "<input id=\"enable-ipv6\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:70",
+      "markup": "<details class=\"preset-panel\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:76",
+      "markup": "<select id=\"discovery-profile-select\"></select>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:77",
+      "markup": "<input id=\"scan-level\" type=\"hidden\" value=\"standard\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:84",
+      "markup": "<input id=\"limit-time-enabled\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:89",
+      "markup": "<input id=\"finder-timeout-hours\" type=\"number\" min=\"0.1\" max=\"24\" step=\"0.5\" value=\"6\" disabled>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:96",
+      "markup": "<input id=\"repeats\" type=\"number\" min=\"1\" max=\"10\" step=\"1\" value=\"1\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:100",
+      "markup": "<input id=\"run-curl-max-time\" type=\"number\" min=\"1\" step=\"1\" value=\"2\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:104",
+      "markup": "<input id=\"run-curl-max-time-quic\" type=\"number\" min=\"1\" step=\"1\" value=\"2\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:108",
+      "markup": "<input id=\"run-curl-max-time-doh\" type=\"number\" min=\"1\" step=\"1\" value=\"2\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:112",
+      "markup": "<input id=\"repeat-parallel\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:116",
+      "markup": "<input id=\"skip-dnscheck\" type=\"checkbox\" checked>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:120",
+      "markup": "<input id=\"skip-ipblock\" type=\"checkbox\" checked>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:132",
+      "markup": "<button class=\"tooltip-button run-action-start\" data-action=\"run-selected-discovery\" data-tooltip=\"Запускает выбранный выше режим поиска с текущими доменами, глубиной проверки и параметрами.\" type=\"button\">Запустить выбранный режим</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/finder.html:133",
+      "markup": "<button class=\"secondary danger tooltip-button run-action-stop\" data-action=\"stop-current\" data-tooltip=\"Останавливает текущий подбор и сохраняет уже найденные успешные стратегии.\" type=\"button\" disabled>Остановить текущий запуск</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:14",
+      "markup": "<select id=\"preset-manager-name\"></select>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:20",
+      "markup": "<textarea id=\"preset-editor-domains\" class=\"line-numbered-textarea\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"youtube.com&#10;discord.com\"></textarea>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:24",
+      "markup": "<button data-action=\"preset-editor-save\" type=\"button\">Сохранить список</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:25",
+      "markup": "<button class=\"secondary\" data-action=\"preset-editor-export\" type=\"button\">Скачать TXT</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:26",
+      "markup": "<button class=\"secondary danger\" data-action=\"preset-editor-delete\" type=\"button\" disabled>Удалить пользовательский список</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:29",
+      "markup": "<details class=\"preset-create-panel\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:33",
+      "markup": "<input id=\"preset-new-name\" autocomplete=\"off\" placeholder=\"my-domains\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:38",
+      "markup": "<textarea id=\"preset-new-domains\" class=\"line-numbered-textarea\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"youtube.com&#10;discord.com\"></textarea>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:42",
+      "markup": "<button data-action=\"preset-new-save\" type=\"button\">Сохранить новый список</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:55",
+      "markup": "<input id=\"v2fly-preset-name\" autocomplete=\"off\" placeholder=\"v2fly-youtube\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:61",
+      "markup": "<input id=\"v2fly-category-search\" list=\"v2fly-category-options\" autocomplete=\"off\" placeholder=\"Начните вводить название группы: youtube, google, discord\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:63",
+      "markup": "<button class=\"secondary\" data-action=\"v2fly-load-categories\" type=\"button\" title=\"Перечитывает уже загруженный локальный каталог групп v2fly.\">Перечитать каталог</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:64",
+      "markup": "<button data-action=\"v2fly-update-local-storage\" type=\"button\" title=\"Загружает или обновляет локальный каталог групп v2fly.\">Загрузить/обновить каталог v2fly</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:73",
+      "markup": "<textarea id=\"v2fly-domains\" class=\"line-numbered-textarea\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"После проверки здесь появятся домены. Список можно отредактировать перед сохранением.\"></textarea>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:77",
+      "markup": "<button class=\"secondary\" data-action=\"v2fly-preview\" type=\"button\">Проверить и развернуть список</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/lists.html:78",
+      "markup": "<button data-action=\"v2fly-import\" type=\"button\">Сохранить пресет</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:13",
+      "markup": "<input id=\"settings-enable-ipv6\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:18",
+      "markup": "<input id=\"settings-debug-stdout\" type=\"checkbox\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:25",
+      "markup": "<input id=\"settings-curl-max\" type=\"number\" min=\"1\" value=\"10\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:30",
+      "markup": "<button data-action=\"save-settings\" type=\"button\">Сохранить настройки</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:33",
+      "markup": "<form class=\"preset-panel settings-access-panel\" id=\"change-password-form\" aria-labelledby=\"settings-access-heading\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:41",
+      "markup": "<input id=\"settings-current-password\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:45",
+      "markup": "<input id=\"settings-new-password\" name=\"new_password\" type=\"password\" autocomplete=\"new-password\" aria-describedby=\"settings-new-password-hint\" required>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:50",
+      "markup": "<button data-action=\"change-password\" type=\"submit\">Изменить пароль</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:65",
+      "markup": "<a id=\"settings-release-stable-link\" class=\"release-version-link\" href=\"https://github.com/balbomush/GP-access-control-plane/releases/latest\" target=\"_blank\" rel=\"noreferrer\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:71",
+      "markup": "<a id=\"settings-release-prerelease-link\" class=\"release-version-link\" href=\"https://github.com/balbomush/GP-access-control-plane/releases\" target=\"_blank\" rel=\"noreferrer\">"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:77",
+      "markup": "<button class=\"secondary\" data-action=\"check-releases\" type=\"button\">Проверить обновления</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:88",
+      "markup": "<button class=\"secondary\" data-action=\"refresh-backups\" type=\"button\">Обновить список</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:89",
+      "markup": "<button data-action=\"create-backup\" type=\"button\">Создать бекап сейчас</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:99",
+      "markup": "<input id=\"backup-upload-file\" type=\"file\" accept=\".zip,application/zip\" hidden>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/settings.html:100",
+      "markup": "<button class=\"secondary\" data-action=\"upload-backup\" type=\"button\">Загрузить бекап</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/terminal.html:7",
+      "markup": "<button class=\"secondary danger\" data-action=\"stop-current\" title=\"Останавливает текущий подбор и сохраняет уже найденные успешные стратегии.\" disabled>Остановить</button>"
+    },
+    {
+      "source": "src/gp_control_plane/web/ui_assets/templates/tabs/terminal.html:51",
+      "markup": "<details class=\"raw-log-panel\">"
+    }
+  ]
+}
