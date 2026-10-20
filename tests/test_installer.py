@@ -135,7 +135,8 @@ class CleanInstallerTests(unittest.TestCase):
         self.assertIn('--restore --target-state-dir "$state_dir"', self.installer[restore_guard:restore_guard_end])
         self.assertNotIn('systemctl enable --now', self.installer[restore_guard:restore_guard_end])
         self.assertIn('gp-control-plane-core.service', self.installer)
-        self.assertIn('if [ "$INSTALL_WEB" = on ]', self.installer)
+        self.assertIn('[ "$INSTALL_WEB" = off ] || fail', self.installer)
+        self.assertNotIn('cat > /etc/systemd/system/gp-control-plane-web.service', self.installer)
         self.assertIn('git -C "$SOURCE_DIR" status --porcelain', self.installer)
         self.assertIn('managed GP root is not canonical', self.installer)
         self.assertIn('gp-control-plane-root-helper', self.installer)
@@ -183,13 +184,15 @@ class CleanInstallerTests(unittest.TestCase):
             self.installer.index('INSTALL_COMMIT="$SOURCE_COMMIT"'),
         )
 
-        for service in ("core", "web"):
+        for service in ("core",):
             default_file = f"/etc/default/gp-control-plane-{service}"
             start = self.installer.index(f"cat > {default_file} <<EOF")
             end = self.installer.index("\nEOF\n", start)
             contents = self.installer[start:end]
             self.assertIn("GP_INSTALLED_REF='$INSTALL_REF'", contents)
             self.assertIn("GP_INSTALLED_COMMIT='$INSTALL_COMMIT'", contents)
+
+        self.assertNotIn('cat > /etc/default/gp-control-plane-web <<EOF', self.installer)
 
         self.assertNotIn("GP_INSTALLED_REF='$CANDIDATE_SHA'", self.installer)
         self.assertNotIn("GP_INSTALLED_COMMIT='$TAG'", self.installer)

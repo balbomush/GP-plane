@@ -1,11 +1,4 @@
-from __future__ import annotations
-
-from ..config import AppConfig
-
-
-def serve_core(config: AppConfig, host: str = "127.0.0.1", port: int = 8081) -> None:
-    # Keep this public compatibility seam while api_server now delegates to
-    # the shared Bottle/Cheroot runtime rather than BaseHTTPRequestHandler.
-    from .api_server import serve
-
-    serve(config, host=host, port=port, ui_enabled=False)
+"""Compatibility alias for Core-owned gp_control_plane.http.core_server."""
+import sys
+from ..http import core_server as _implementation
+sys.modules[__name__] = _implementation

@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     sources_parser = subparsers.add_parser("domain-sources", help="Prepare local domain source caches")
     sources_subparsers = sources_parser.add_subparsers(dest="domain_sources_command", required=True)
     sources_subparsers.add_parser("prepare-v2fly", help="Download and prepare local v2fly domain-list storage")
-    web_parser = subparsers.add_parser("web", help="Run local web UI")
+    web_parser = subparsers.add_parser("web", help="Removed: install GP Plane Web and use gp-web")
     web_parser.add_argument(
         "--config",
         default=None,
@@ -168,18 +168,11 @@ def _main(args: argparse.Namespace) -> int:
         raise ValueError("unsupported domain-sources command")
 
     if args.command == "web":
-        if args.core_url:
-            from .web.proxy import serve_web_proxy
-
-            serve_web_proxy(config, host=args.host, port=args.port, core_url=args.core_url)
-        else:
-            from .web.app import serve
-
-            serve(config, host=args.host, port=args.port)
-        return 0
+        print("Web is a separate package: install GP Plane Web and run gp-web.", file=sys.stderr)
+        return 2
 
     if args.command == "core":
-        from .web.core_server import serve_core
+        from .http.core_server import serve_core
 
         serve_core(config, host=args.host, port=args.port)
         return 0

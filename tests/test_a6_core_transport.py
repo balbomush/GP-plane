@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.web.core_app import CoreServices, create_core_app
 from gp_control_plane.web.core_runtime import create_core_runtime
-from gp_control_plane.web.proxy import create_web_runtime
+from gp_control_plane_web.proxy import create_web_runtime
 
 
 def _free_port() -> int:

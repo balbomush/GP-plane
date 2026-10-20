@@ -99,7 +99,7 @@ rm() {
   case "$*" in *"$TEST_TMP/preparation."*) command rm "$@";;
     *) event FORBIDDEN-removal; return 99;; esac
 }
-source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 0000000000000000000000000000000000000001 --web on --initial-install off
+source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 0000000000000000000000000000000000000001 --web off --initial-install off
 '''
         for failure in ("apt", "network", "checksum", "archive", "architecture", "runtime", "venv", "wheel", "package", "import", "none"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:

@@ -27,11 +27,11 @@ class OpenApiBuildTests(unittest.TestCase):
             command.force = True
             with mock.patch.object(build_py, "run"), mock.patch.object(build_py, "get_outputs", return_value=[]):
                 command.run()
-                output = Path(temporary) / "gp_control_plane" / "web" / "openapi.json"
+                output = Path(temporary) / "gp_control_plane" / "http" / "openapi.json"
                 self.assertEqual(output.read_bytes(), (root / "openapi.json").read_bytes())
                 self.assertIn(str(output), command.get_outputs())
         self.assertIn("include openapi.json", (root / "MANIFEST.in").read_text())
-        self.assertFalse((root / "src" / "gp_control_plane" / "web" / "openapi.json").exists())
+        self.assertFalse((root / "src" / "gp_control_plane" / "http" / "openapi.json").exists())
 
 
 if __name__ == "__main__":

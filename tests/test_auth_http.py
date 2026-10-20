@@ -28,7 +28,7 @@ from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.storage import StorageUnavailableError, append_run, db_path
 from gp_control_plane.strategy_finder import _LiveStdoutRecorder, upsert_candidate_event_conn as storage_upsert_candidate_event_conn
 from gp_control_plane.web.api_server import serve
-from gp_control_plane.web.proxy import serve_web_proxy
+from gp_control_plane_web.proxy import serve_web_proxy
 
 
 _PROCESS_TIMEOUT_SECONDS = 15
@@ -1356,7 +1356,7 @@ def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _M
     port = _free_port()
     module = sys.modules[function.__module__]
     if function.__name__ == "serve_web_proxy" and "core_url" in kwargs:
-        from gp_control_plane.web.proxy import create_web_runtime
+        from gp_control_plane_web.proxy import create_web_runtime
 
         runtime = create_web_runtime(config, "127.0.0.1", port, **kwargs)
         startup_errors: list[BaseException] = []

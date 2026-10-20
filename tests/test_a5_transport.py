@@ -34,20 +34,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gp_control_plane.backups import snapshot_archive_path, snapshots_dir
 from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.resource_budget import BACKUP_UPLOAD_MAX_BYTES, JSON_REQUEST_MAX_BYTES
-from gp_control_plane.web.cheroot_connection import (
+from gp_control_plane_web.cheroot_connection import (
     GPHTTPConnection,
     WebStreamLifecycle,
     _is_peer_disconnect,
     close_writer_then_base,
 )
-from gp_control_plane.web.core_client import CoreClient, CoreResponse
-from gp_control_plane.web.http_body import (
+from gp_control_plane_web.core_client import CoreClient, CoreResponse
+from gp_control_plane_web.http_body import (
     ProxyRequestBodyMalformed,
     ProxyRequestBodyTooLarge,
     read_request_body,
 )
-from gp_control_plane.web.http_runtime import WebHttpRuntime
-from gp_control_plane.web.web_app import _CoreResponseStream, create_web_app
+from gp_control_plane_web.http_runtime import WebHttpRuntime
+from gp_control_plane_web.web_app import _CoreResponseStream, create_web_app
 from cheroot.server import HTTPConnection, MakeFile
 
 
@@ -105,7 +105,7 @@ class A5HttpBodyTests(unittest.TestCase):
 
         rejected = b"x" * (3 * 64 * 1024 + 7)
         stream = RecordingStream(rejected)
-        with mock.patch("gp_control_plane.web.http_body.JSON_REQUEST_MAX_BYTES", 4), self.assertRaises(
+        with mock.patch("gp_control_plane_web.http_body.JSON_REQUEST_MAX_BYTES", 4), self.assertRaises(
             ProxyRequestBodyTooLarge
         ):
             read_request_body(
@@ -1445,7 +1445,7 @@ def _start_web(
     core_port: int,
     connection_class: type[HTTPConnection] = GPHTTPConnection,
 ) -> tuple[int, WebHttpRuntime, threading.Thread]:
-    from gp_control_plane.web.core_client import CoreClient
+    from gp_control_plane_web.core_client import CoreClient
 
     port = _free_port()
     stream_lifecycle = WebStreamLifecycle()

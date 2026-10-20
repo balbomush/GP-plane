@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "gp-access-control-plane"
 version = "0.4.4"
 license = {file = "LICENSE"}
-description = "Linux web UI and control plane for zapret2 strategy discovery."
+description = "Headless Core API and control plane for zapret2 strategy discovery."
 requires-python = ">=3.11"
 dependencies = [
     "bottle==0.13.4",
@@ -23,9 +23,4 @@ where = ["src"]
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 [tool.setuptools.package-data]
-"gp_control_plane.web.ui_assets" = [
-    "templates/*.html",
-    "templates/tabs/*.html",
-    "styles/*.css",
-    "scripts/*.js",
-]
+"gp_control_plane.http" = ["openapi.json"]

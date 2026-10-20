@@ -17,6 +17,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$INSTALL_USER" in ''|root|*[!A-Za-z0-9_-]*) fail 'install user is invalid';; esac
 case "$INSTALL_WEB" in on|off) ;; *) fail 'web mode must be on or off';; esac
+[ "$INSTALL_WEB" = off ] || fail 'Core-only installation; install GP Plane Web separately'
 case "$INITIAL_INSTALL" in on|off) ;; *) fail 'initial-install must be on or off';; esac
 [ -d "$SOURCE_DIR/.git" ] && [ ! -L "$SOURCE_DIR" ] || fail 'source directory is unsafe'
 [ -z "$TAG" ] || [ -z "$CANDIDATE_SHA" ] || usage
@@ -97,8 +98,16 @@ else
   mv -T -- "$publish_dir/runtime" "$zapret_dir"
 fi
 runuser -u "$INSTALL_USER" -- python3 "$SOURCE_DIR/scripts/prepare-zapret2.py" --probe --destination "$zapret_dir"
+python3 "$SOURCE_DIR/scripts/check-core-listener.py" --install-dir "$install_dir" --install-user "$INSTALL_USER"
 phase=activation
-stop_unit() { systemctl disable --now "$1" >/dev/null 2>&1 || true; }
+stop_unit() {
+  local state
+  state=$(systemctl show --property=LoadState --value "$1") || fail 'could not identify legacy GP service'
+  if [ "$state" != not-found ]; then
+    systemctl disable --now "$1" || fail 'legacy GP service did not stop; files were preserved'
+    if systemctl is-active --quiet "$1"; then fail 'legacy GP service is still active; files were preserved'; fi
+  fi
+}
 stop_unit gp-control-plane-web.service; stop_unit gp-control-plane-core.service
 rm -f -- /etc/systemd/system/gp-control-plane-core.service /etc/systemd/system/gp-control-plane-web.service
 rm -f -- /etc/default/gp-control-plane-install-profile /etc/default/gp-control-plane-core /etc/default/gp-control-plane-web /etc/default/gp-control-plane-root-helper /etc/sudoers.d/gp-control-plane-root-helper
@@ -167,29 +176,5 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-if [ "$INSTALL_WEB" = on ]; then
-cat > /etc/default/gp-control-plane-web <<EOF
-GP_INSTALL_DIR='$install_dir'
-GP_STATE_DIR='$state_dir'
-GP_INSTALLED_REF='$INSTALL_REF'
-GP_INSTALLED_COMMIT='$INSTALL_COMMIT'
-EOF
-cat > /etc/systemd/system/gp-control-plane-web.service <<EOF
-[Unit]
-Description=GP Strategy Finder Web UI
-After=network-online.target gp-control-plane-core.service
-[Service]
-User=$INSTALL_USER
-WorkingDirectory=$install_dir
-Environment=HOME=$target_home
-Environment=PATH=/usr/local/libexec/gp-control-plane:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-EnvironmentFile=/etc/default/gp-control-plane-web
-ExecStart=$install_dir/.venv/bin/gp-control-plane web --host 0.0.0.0 --port 8080 --core-url http://127.0.0.1:8081
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF
-fi
 systemctl daemon-reload; systemctl enable --now gp-control-plane-core.service
-if [ "$INSTALL_WEB" = on ]; then systemctl enable --now gp-control-plane-web.service; fi
 printf '%s\n' 'status=success phase=fresh-install'
