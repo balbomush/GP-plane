@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Internal Pi validation transport only. Public installation uses bootstrap-linux.sh and an annotated tag.
 set -Eeuo pipefail
-REPO_URL='https://github.com/balbomush/GP-access-control-plane.git'
+REPO_URL='https://github.com/balbomush/GP-plane.git'
 CANDIDATE_SHA=
 INSTALL_WEB="${GP_INSTALL_WEB:-off}"
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }

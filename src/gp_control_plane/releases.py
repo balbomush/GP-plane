@@ -8,10 +8,10 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 
-REPO_URL = "https://github.com/balbomush/GP-access-control-plane.git"
-RELEASES_API_URL = "https://api.github.com/repos/balbomush/GP-access-control-plane/releases"
-RELEASES_PAGE_URL = "https://github.com/balbomush/GP-access-control-plane/releases"
-LATEST_RELEASE_URL = "https://github.com/balbomush/GP-access-control-plane/releases/latest"
+REPO_URL = "https://github.com/balbomush/GP-plane.git"
+RELEASES_API_URL = "https://api.github.com/repos/balbomush/GP-plane/releases"
+RELEASES_PAGE_URL = "https://github.com/balbomush/GP-plane/releases"
+LATEST_RELEASE_URL = "https://github.com/balbomush/GP-plane/releases/latest"
 _VERSION_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([A-Za-z0-9.-]+))?")
 
 

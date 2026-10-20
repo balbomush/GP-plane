@@ -14,7 +14,7 @@ class ReadmeInstallationTests(unittest.TestCase):
         project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         expected_tag = f"v{project['project']['version']}"
         expected_url = (
-            "https://github.com/balbomush/GP-access-control-plane/releases/download/"
+            "https://github.com/balbomush/GP-plane/releases/download/"
             f"{expected_tag}/bootstrap-linux.sh"
         )
         stable_blocks = [

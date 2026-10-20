@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One user-visible clean-install command. Everything before sudo is safe to retry.
 set -Eeuo pipefail
-REPO_URL="${GP_REPO_URL:-https://github.com/balbomush/GP-access-control-plane.git}"
+REPO_URL="${GP_REPO_URL:-https://github.com/balbomush/GP-plane.git}"
 TAG="${GP_BRANCH:-}"
 INSTALL_WEB="${GP_INSTALL_WEB:-off}"
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }

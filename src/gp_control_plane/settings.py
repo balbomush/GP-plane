@@ -23,8 +23,8 @@ DEFAULT_RUN_SETTINGS = {
 
 DEFAULT_SERVICE_SETTINGS = {
     "update_channel": "stable",
-    "stable_release_url": "https://github.com/balbomush/GP-access-control-plane/releases/latest",
-    "prerelease_url": "https://github.com/balbomush/GP-access-control-plane/releases",
+    "stable_release_url": "https://github.com/balbomush/GP-plane/releases/latest",
+    "prerelease_url": "https://github.com/balbomush/GP-plane/releases",
 }
 
 DEFAULT_SETTINGS = {**DEFAULT_RUN_SETTINGS, **DEFAULT_SERVICE_SETTINGS}

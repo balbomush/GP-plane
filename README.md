@@ -23,14 +23,14 @@ sudo reboot
 Обычная установка с Core service и Web UI:
 
 ```bash
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-access-control-plane/releases/download/v0.4.4/bootstrap-linux.sh'
+GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
 curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 bash
 ```
 
 Headless-установка без штатного Web UI:
 
 ```bash
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-access-control-plane/releases/download/v0.4.4/bootstrap-linux.sh'
+GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
 curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 GP_INSTALL_WEB=off bash
 ```
 
@@ -102,7 +102,7 @@ GP_INSTALL_WEB=on
 EOF
 
 set -a; . ./gp-install.env; set +a
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-access-control-plane/releases/download/v0.4.4/bootstrap-linux.sh'
+GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
 curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 bash
 ```
 
@@ -216,7 +216,7 @@ wrapper в `/usr/local/libexec/gp-control-plane`. Существующая са�
 Повторно запустите bootstrap:
 
 ```bash
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-access-control-plane/releases/download/v0.4.4/bootstrap-linux.sh'
+GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
 curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 bash
 ```
 
