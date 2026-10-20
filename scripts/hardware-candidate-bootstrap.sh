@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 REPO_URL='https://github.com/balbomush/GP-access-control-plane.git'
 CANDIDATE_SHA=
-INSTALL_WEB="${GP_INSTALL_WEB:-on}"
+INSTALL_WEB="${GP_INSTALL_WEB:-off}"
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() { printf '%s\n' 'usage: hardware-candidate-bootstrap.sh --candidate-sha <40-lowercase-hex>' >&2; exit 64; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"; }
@@ -16,6 +16,7 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' "$CANDIDATE_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail 'candidate SHA must be a full lowercase commit SHA'
 case "$INSTALL_WEB" in on|off) ;; *) fail 'GP_INSTALL_WEB must be on or off' ;; esac
+[ "$INSTALL_WEB" = off ] || fail 'Core-only installation: install GP Plane Web separately; GP_INSTALL_WEB=on is no longer supported'
 need git; need python3; need sudo
 # v0.4 devices may have used either supported state location.  A clean-install
 # handoff is safe only when exactly one of them is present.

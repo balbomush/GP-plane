@@ -257,10 +257,11 @@ class BearerAuthHttpTests(unittest.TestCase):
                 self.assertEqual(status_status, 404)
                 self.assertIn("error", json.loads(status_body))
 
-    def test_monolith_public_allowlist_and_protected_transport_routes(self) -> None:
+    def test_independent_web_public_allowlist_and_protected_transport_routes(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            port = _start_server(serve, config)
+            core_port = _start_server(serve, config, ui_enabled=False)
+            port = _start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}")
 
             for path in ("/", "/swagger", "/swagger/", "/openapi.json", "/api/health"):
                 status, _headers, _body = _request(port, path)
@@ -779,7 +780,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                 servers: list[_ManagedServer] = []
                 connection = response = new_connection = new_response = None
                 try:
-                    core = _start_managed_server(serve, config, ui_enabled=topology == "core")
+                    core = _start_managed_server(serve, config, ui_enabled=False)
                     servers.append(core)
                     if topology == "core":
                         port = core.port
@@ -798,7 +799,8 @@ class BearerAuthHttpTests(unittest.TestCase):
                     self.assertEqual(status, 200)
                     old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
-                    connection, response = _open_sse(port, old_bearer)
+                    stream_path = "/api/internal/web-events/stream" if topology == "core" else "/api/web/events/stream"
+                    connection, response = _open_sse(port, old_bearer, path=stream_path)
                     self.assertEqual(response.status, 200)
                     self.assertEqual(response.getheader("Content-Type"), "text/event-stream; charset=utf-8")
                     status, _headers, body = _request(
@@ -808,12 +810,12 @@ class BearerAuthHttpTests(unittest.TestCase):
                     )
                     self.assertEqual(status, 200)
                     new_token = json.loads(body)["access_token"]
-                    status, _headers, _body = _request(port, "/api/web/events/stream", headers=old_bearer)
+                    status, _headers, _body = _request(port, stream_path, headers=old_bearer)
                     self.assertEqual(status, 401)
                     self.assertIsInstance(response.read(), bytes)
                     self.assertTrue(response.isclosed())
 
-                    new_connection, new_response = _open_sse(port, {"Authorization": f"Bearer {new_token}"})
+                    new_connection, new_response = _open_sse(port, {"Authorization": f"Bearer {new_token}"}, path=stream_path)
                     self.assertEqual(new_response.status, 200)
                 finally:
                     _close_sse(new_connection, new_response)
@@ -842,7 +844,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                         raise TimeoutError("test did not release the next SSE authorization check")
 
                 try:
-                    core = _start_managed_server(serve, config, ui_enabled=topology == "core")
+                    core = _start_managed_server(serve, config, ui_enabled=False)
                     servers.append(core)
                     port = core.port
                     if topology == "proxy":
@@ -861,7 +863,8 @@ class BearerAuthHttpTests(unittest.TestCase):
                     old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
                     with mock.patch.object(api_server.time, "sleep", side_effect=controlled_sleep):
-                        connection, response = _open_sse(port, old_bearer)
+                        stream_path = "/api/internal/web-events/stream" if topology == "core" else "/api/web/events/stream"
+                        connection, response = _open_sse(port, old_bearer, path=stream_path)
                         self.assertEqual(response.status, 200)
                         self.assertEqual(response.readline(), b"event: status\n")
                         self.assertTrue(response.readline().startswith(b"data: "))
@@ -1086,7 +1089,7 @@ class BearerAuthHttpTests(unittest.TestCase):
     def test_sse_storage_failure_after_headers_emits_one_normalized_event_error(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core = _start_managed_server(serve, config, ui_enabled=True)
+            core = _start_managed_server(serve, config, ui_enabled=False)
             connection = response = None
             try:
                 status, _headers, body = _request(
@@ -1105,7 +1108,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                 ), mock.patch("gp_control_plane.web.api_server.time.sleep", return_value=None), self.assertLogs(
                     "gp_control_plane.web.api_server", level="WARNING"
                 ) as logged:
-                    connection, response = _open_sse(core.port, headers)
+                    connection, response = _open_sse(core.port, headers, path="/api/internal/web-events/stream")
                     stream = response.read()
 
                 self.assertEqual(response.status, 200)
@@ -1119,7 +1122,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                 self.assertNotIn("HTTP/", stream.decode("utf-8"))
                 record = "\n".join(logged.output)
                 self.assertIn("operation=GET", record)
-                self.assertIn("route=/api/web/events/stream", record)
+                self.assertIn("route=/api/internal/web-events/stream", record)
                 self.assertIn("sqlite_primary_code=5", record)
                 self.assertIn("sqlite_extended_code=517", record)
                 self.assertIn("sqlite_errorname=SQLITE_BUSY_SNAPSHOT", record)
@@ -1383,6 +1386,8 @@ def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _M
     if function.__name__ in {"serve", "serve_core"} and function.__module__ in {
         "gp_control_plane.web.api_server",
         "gp_control_plane.web.core_server",
+        "gp_control_plane.http.api_server",
+        "gp_control_plane.http.core_server",
     }:
         from gp_control_plane.web.core_runtime import create_core_runtime
 
@@ -1390,7 +1395,7 @@ def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _M
             config,
             "127.0.0.1",
             port,
-            ui_enabled=bool(kwargs.get("ui_enabled", function.__name__ == "serve")),
+            ui_enabled=bool(kwargs.get("ui_enabled", False)),
         )
         startup_errors: list[BaseException] = []
 
@@ -1488,9 +1493,9 @@ def _request(
         connection.close()
 
 
-def _open_sse(port: int, headers: dict[str, str]) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+def _open_sse(port: int, headers: dict[str, str], *, path: str = "/api/web/events/stream") -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    connection.request("GET", "/api/web/events/stream", headers=headers)
+    connection.request("GET", path, headers=headers)
     return connection, connection.getresponse()
 
 
