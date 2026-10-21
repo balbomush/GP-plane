@@ -25,7 +25,7 @@ cd /tmp
 
 Для qualification используйте отдельные каталоги и точные wheel/checksum; `/tmp`
 в примере не является штатным хранилищем. Продуктовые зависимости — в
-`requirements-runtime.lock`. Собственные Core tests и интеграционные проверки
+`requirements/a5-transport.lock`. Собственные Core tests и интеграционные проверки
 разделены по ответственности; [HTTP/runtime](docs/headless-runtime-core-api.md).
 
 Собственный набор: `python -m unittest discover -s tests`. Linux shell/socket,
