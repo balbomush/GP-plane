@@ -43,6 +43,10 @@ symlink и аппаратные сценарии проверяются на Lin
 Runner проверяет отдельные установленные пакеты и их точное совпадение с wheel;
 отсутствующий артефакт не считается успешным skip. Browser/toolchain и real engine
 имеют отдельные gates. Тестовые данные и результаты храните вне checkout.
+Для browser case из standalone clone/sdist задайте `GP_BROWSER_RUNTIME` —
+абсолютный путь к подготовленному BGT-001 runtime — и `GP_BROWSER_ARTIFACTS`.
+Runner проверяет прежние SHA Node, версию Playwright и revision Chromium;
+переменная пути не отключает проверку закреплённого toolchain.
 
 ## Core-only установка и обновление
 

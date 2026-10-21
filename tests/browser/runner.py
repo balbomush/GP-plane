@@ -38,6 +38,12 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _runtime_path(lock: dict[str, Any]) -> Path:
+    return (Path(os.environ["GP_BROWSER_RUNTIME"]).resolve(strict=True)
+            if os.environ.get("GP_BROWSER_RUNTIME") else
+            _WORKSPACE / "runtime" / "bgt-001" / lock["runtimeId"])
+
+
 def _validate_toolchain(runtime: Path, lock: dict[str, Any]) -> tuple[Path, Path]:
     node = runtime / "node" / "node.exe"
     package = lock["playwright"]["package"]
@@ -73,7 +79,7 @@ class PlaywrightPage:
 
     def __init__(self) -> None:
         self._lock = _load_toolchain_lock()
-        self._runtime = _WORKSPACE / "runtime" / "bgt-001" / self._lock["runtimeId"]
+        self._runtime = _runtime_path(self._lock)
         node, _module = _validate_toolchain(self._runtime, self._lock)
         run_id = uuid.uuid4().hex
         self._artifact_dir = _LEDGER / f"bgt-001-{run_id}"

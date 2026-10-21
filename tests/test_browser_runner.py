@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tests.browser import runner
 from tests.browser.runner import PlaywrightPage
@@ -65,10 +65,17 @@ class PlaywrightRunnerLifecycleTests(unittest.TestCase):
 
     def test_toolchain_lock_matches_runtime_validation(self) -> None:
         lock = runner._load_toolchain_lock()
-        runtime = runner._WORKSPACE / "runtime" / "bgt-001" / lock["runtimeId"]
+        runtime = runner._runtime_path(lock)
         node, module = runner._validate_toolchain(runtime, lock)
         self.assertTrue(node.is_file())
         self.assertEqual(__import__("json").loads(module.read_text(encoding="utf-8"))["version"], lock["playwright"]["version"])
+
+    def test_explicit_runtime_does_not_bypass_toolchain_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, patch.dict(runner.os.environ,{'GP_BROWSER_RUNTIME':folder}):
+            lock=runner._load_toolchain_lock()
+            self.assertEqual(runner._runtime_path(lock),Path(folder).resolve())
+            with self.assertRaisesRegex(AssertionError,'pinned Node is unavailable'):
+                runner._validate_toolchain(runner._runtime_path(lock),lock)
 
     def test_success_cleans_isolated_profile_and_artifacts(self) -> None:
         with PlaywrightPage() as page:
