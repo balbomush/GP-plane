@@ -16,10 +16,9 @@ from typing import Any
 from unittest import mock
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 
 from gp_control_plane.config import AppConfig, OutputConfig  # noqa: E402
-from gp_control_plane.web.core_client import hop_by_hop_header_names  # noqa: E402
 from tests.browser.runner import PlaywrightPage  # noqa: E402
 
 
@@ -75,7 +74,7 @@ def _serve_core_process(
                         raise TimeoutError("Core Cheroot child did not become ready")
                     time.sleep(0.01)
             ready.set()
-            if not stop.wait(timeout=_PROCESS_TIMEOUT_SECONDS):
+            if not stop.wait(timeout=120):
                 raise TimeoutError("parent did not stop Core Cheroot child")
             runtime.stop()
             thread.join(timeout=5)
@@ -86,44 +85,21 @@ def _serve_core_process(
         ready.set()
 
 
-def _serve_web_process(
-    state_dir_raw: str,
-    port: int,
-    core_url: str,
-    ready: Any,
-    stop: Any,
-    errors: Any,
-) -> None:
-    from gp_control_plane.web import proxy
-
-    config = AppConfig(output=OutputConfig(state_dir=Path(state_dir_raw)))
-
-    def forbidden_sqlite_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
-        raise AssertionError("Web process must not open product SQLite")
-
+def _serve_web_process(state_dir_raw,port,core_url,ready,stop,errors):
+    # State path is intentionally unused in the independent Web process.
+    from tests.support.web_process import start_web_process
+    owner=None
     try:
-        with mock.patch("sqlite3.connect", side_effect=forbidden_sqlite_connect):
-            runtime = proxy.create_web_runtime(config, "127.0.0.1", port, core_url=core_url)
-            thread = threading.Thread(target=runtime.serve_forever, name="a4-cheroot-web", daemon=True)
-            thread.start()
-            deadline = time.monotonic() + _PROCESS_TIMEOUT_SECONDS
-            while True:
-                try:
-                    with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                        break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("Cheroot Web child did not become ready")
-                    time.sleep(0.01)
-            ready.set()
-            stop.wait(timeout=_PROCESS_TIMEOUT_SECONDS)
-            runtime.stop()
-            thread.join(timeout=_PROCESS_TIMEOUT_SECONDS)
-            if thread.is_alive():
-                raise TimeoutError("Cheroot Web child did not stop")
-    except BaseException as error:  # noqa: BLE001 - child errors are asserted by the parent
-        errors.put(repr(error))
+        owner=start_web_process(port,core_url,deny_sqlite=True)
         ready.set()
+        if not stop.wait(timeout=120):
+            raise TimeoutError('parent did not stop installed Web owner')
+    except BaseException as error:
+        errors.put(repr(error));ready.set()
+    finally:
+        if owner is not None:
+            try:owner.close()
+            except BaseException as error:errors.put(repr(error))
 
 
 class _SplitRuntime:
@@ -294,20 +270,6 @@ class A4SplitRuntimeTests(unittest.TestCase):
                 contract = _request(runtime.core_port, "/openapi.json")[2]
                 self.assertNotIn(b"/api/internal/", contract)
 
-                self.assertEqual(
-                    hop_by_hop_header_names({"Connection": "X-A4-Private", "X-A4-Private": "not-forwarded"}),
-                    frozenset({
-                        "connection",
-                        "keep-alive",
-                        "proxy-authenticate",
-                        "proxy-authorization",
-                        "te",
-                        "trailer",
-                        "transfer-encoding",
-                        "upgrade",
-                        "x-a4-private",
-                    }),
-                )
             finally:
                 runtime.close(self)
 
@@ -364,28 +326,28 @@ class A4SplitRuntimeTests(unittest.TestCase):
                 with PlaywrightPage() as page:
                     page.navigate(f"http://127.0.0.1:{runtime.web_port}/")
                     page.wait_for(
-                        "document.readyState === 'complete' && document.getElementById('login-form')",
+                        "document.readyState === 'complete' && document.querySelector('input[autocomplete=username]')",
                         "split Web serves the login shell while Core views return 503",
                     )
-                    page.fill("#login-username", "admin")
-                    page.fill("#login-password", "admin")
-                    page.click('#login-form button[type="submit"]')
+                    page.fill("input[autocomplete=username]", "admin")
+                    page.fill("input[autocomplete=current-password]", "admin")
+                    page.click('form button')
                     page.wait_for(
-                        "bootstrapState === 'failed' && !document.getElementById('boot-retry').hidden",
+                        "[...document.querySelectorAll('[role=status]')].some(e=>e.textContent==='Не удалось загрузить Core') && [...document.querySelectorAll('button')].some(e=>e.textContent==='Повторить загрузку' && !e.disabled)",
                         "Core 503 reaches the browser bootstrap failure state",
                     )
                     runtime.force_view_503.clear()
-                    page.click("#boot-retry")
+                    page.click("button:text-is(\"Повторить загрузку\")")
                     page.wait_for(
-                        "bootstrapState === 'ready' && !document.getElementById('app-shell').hidden",
+                        "!!document.querySelector('[role=tablist]') && !!document.querySelector('[aria-label=Сводка]')",
                         "browser bootstrap retries through the split Web-to-Core path",
                     )
                     self.assertEqual(
                         page.evaluate(
                             "({ token: Boolean(localStorage.getItem('gp-control-plane-auth-token')), "
-                            "status: document.getElementById('metric-job').textContent })"
+                            "status: document.querySelector('[aria-label=Сводка] button .metric-value').textContent })"
                         ),
-                        {"token": True, "status": "Свободно"},
+                        {"token": False, "status": "Свободно"},
                     )
             finally:
                 runtime.close(self)

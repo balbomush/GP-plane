@@ -21,12 +21,12 @@ from unittest import mock
 
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 
 from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.web.core_app import CoreServices, create_core_app
 from gp_control_plane.web.core_runtime import create_core_runtime
-from gp_control_plane_web.proxy import create_web_runtime
+from tests.support.web_process import start_web_process
 
 
 def _free_port() -> int:
@@ -84,37 +84,23 @@ def _running_split() -> object:
         core_port = _free_port()
         web_port = _free_port()
         core = create_core_runtime(config, "127.0.0.1", core_port)
-        web = create_web_runtime(config, "127.0.0.1", web_port, core_url=f"http://127.0.0.1:{core_port}")
+        web = start_web_process(web_port, f"http://127.0.0.1:{core_port}")
         core_thread = threading.Thread(target=core.serve_forever, name="a6-core", daemon=True)
-        web_thread = threading.Thread(target=web.serve_forever, name="a6-web", daemon=True)
+        web_thread = None
         core_thread.start()
         _wait_for_listener(core_port)
-        web_thread.start()
         _wait_for_listener(web_port)
         try:
             yield config, core_port, web_port, core, web, core_thread, web_thread
         finally:
-            web.stop()
+            web.close()
             core.stop()
-            web_thread.join(timeout=5)
             core_thread.join(timeout=5)
-            if web_thread.is_alive() or core_thread.is_alive():
+            if core_thread.is_alive():
                 raise AssertionError("A6 listener did not stop within 5 seconds")
 
 
-class A6CoreTransportTests(unittest.TestCase):
-    def test_factory_is_unbound_and_headless_does_not_import_renderer(self) -> None:
-        import sys
-
-        sys.modules.pop("gp_control_plane.web.ui", None)
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            services = CoreServices(config=config, discovery=mock.Mock())
-            app = create_core_app(services)
-
-            self.assertTrue(callable(app))
-            self.assertNotIn("gp_control_plane.web.ui", sys.modules)
-
+class A6CoreWebTransportTests(unittest.TestCase):
     def test_real_core_web_route_openapi_head_internal_and_legacy_501_contracts(self) -> None:
         with _running_split() as (_config, core_port, web_port, _core, _web, _core_thread, _web_thread):
             bearer = _login(web_port)
@@ -155,6 +141,7 @@ class A6CoreTransportTests(unittest.TestCase):
             self.assertEqual(put_headers["content-length"], "356")
             self.assertEqual(put_headers["content-type"], "text/html;charset=utf-8")
             self.assertIn(b"Unsupported method ('PUT')", put_body)
+
 
     def test_real_core_body_framing_and_established_sse_revoke_close(self) -> None:
         with _running_split() as (_config, core_port, web_port, _core, _web, _core_thread, _web_thread):
@@ -239,7 +226,3 @@ class A6CoreTransportTests(unittest.TestCase):
                 self.assertIn(b"0\r\n\r\n", core_payload)
             finally:
                 core_stream.close()
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+if os.environ.get("GP_TEST_INSTALLED") != "1":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from gp_control_plane.config import AppConfig, InstallConfig, OutputConfig
 from gp_control_plane.application import web_views
@@ -33,11 +34,11 @@ from gp_control_plane.state import read_state, write_state
 from gp_control_plane.storage import SCHEMA_VERSION, append_run, read_app_setting
 import gp_control_plane.strategy_finder as strategy_finder
 from gp_control_plane.strategy_finder import upsert_candidates
-from gp_control_plane.web import app as web_app
-from gp_control_plane.web import docs as web_docs
-from gp_control_plane.web import routes as web_routes
-from gp_control_plane.web.app import index_html, serve, serve_core, serve_web_proxy
-from tests.browser.runner import PlaywrightPage
+from gp_control_plane.http import api_server as web_app
+from gp_control_plane.http import docs as web_docs
+from gp_control_plane.http import routes as web_routes
+from gp_control_plane.http.core_server import serve_core
+serve = serve_core
 
 
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -85,10 +86,11 @@ LEGACY_API_ROUTE_LITERALS = (
 )
 
 
-class WebUiTests(unittest.TestCase):
+class CoreApplicationHttpTests(unittest.TestCase):
     def assertNoLegacyUiApi(self, html: str) -> None:
         for marker in (*LEGACY_UI_API_MARKERS, *LEGACY_API_ROUTE_LITERALS):
             self.assertNotIn(marker, html)
+
 
     def assertApiError(self, payload: dict[str, Any], code: str) -> None:
         self.assertEqual(set(payload), {"error"})
@@ -97,6 +99,7 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(error.get("code"), code)
         self.assertIsInstance(error.get("message"), str)
         self.assertEqual(error.get("details"), {})
+
 
     def test_core_status_reports_sqlite_storage_schema_version(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -120,6 +123,7 @@ class WebUiTests(unittest.TestCase):
             payload = web_app.core_api.status_payload(config)
 
             self.assertEqual(payload["last_snapshot"], expected_snapshot)
+
 
     def test_web_status_includes_zapret_diagnostics_for_the_system_card(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -150,6 +154,7 @@ class WebUiTests(unittest.TestCase):
             storage_status.assert_called_once_with(config.output.state_dir)
             self.assertTrue(payload["storage"]["ready"])
             self.assertEqual(payload["storage"]["schema_version"], SCHEMA_VERSION)
+
 
     def test_clean_install_vault_api_never_exposes_known_local_secret_and_restores_by_id_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -223,6 +228,7 @@ class WebUiTests(unittest.TestCase):
                     self.assertTrue(json.loads(body)["completed"])
                     restore.assert_called_once_with(config.output.state_dir, vault_id="a" * 32)
 
+
     def test_core_status_keeps_saving_lifecycle_until_post_run_snapshot_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
@@ -293,6 +299,7 @@ class WebUiTests(unittest.TestCase):
                         "snapshot": {"id": "post-run-snapshot"},
                     },
                 )
+
 
     def test_active_run_http_contract_keeps_one_public_run_id_for_ui(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -387,6 +394,7 @@ class WebUiTests(unittest.TestCase):
 
                 self.assertIsNone(read_state(config.output.state_dir).get("current_run_id"))
                 self.assertTrue(snapshot_completed.is_set())
+
 
     def test_current_run_endpoints_do_not_fall_back_to_previous_run_log(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -485,1725 +493,6 @@ class WebUiTests(unittest.TestCase):
                 self.assertTrue(worker_finished.is_set())
                 self.assertTrue(snapshot_finished.is_set())
 
-    def test_ui_runtime_uses_public_current_run_without_legacy_job_fields(self) -> None:
-        html = index_html()
-
-        self.assertIn("function currentRun()", html)
-        self.assertIn("return runState.current();", html)
-        self.assertIn("return this._accepted || ((this.view.status || {}).current_run || null);", html)
-        self.assertIn("return runState.busy();", html)
-        self.assertIn("const jobStatus = currentRun()?.status", html)
-        self.assertIn("const runId = response?.run_id || '';", html)
-        self.assertNotIn("target_ref: data.update_id || channel,", html)
-        self.assertNotIn("current_job", html)
-        self.assertNotIn("job_id", html)
-        self.assertNotIn("response?.job", html)
-
-    def test_candidates_and_runs_use_50_item_load_more_pagination(self) -> None:
-        html = index_html()
-
-        self.assertIn("const LIST_PAGE_LIMIT = 50;", html)
-        self.assertIn("const CANDIDATE_PAGE_LIMIT = LIST_PAGE_LIMIT;", html)
-        self.assertIn("const DOMAIN_PAGE_LIMIT = LIST_PAGE_LIMIT;", html)
-        self.assertIn("const RUN_PAGE_LIMIT = LIST_PAGE_LIMIT;", html)
-        self.assertIn("params.set('limit', String(DOMAIN_PAGE_LIMIT));", html)
-        self.assertIn("params.set('limit', String(RUN_PAGE_LIMIT));", html)
-        self.assertIn("listLoadMore('load-more-candidates'", html)
-        self.assertIn("listLoadMore('load-more-candidate-domains'", html)
-        self.assertIn("listLoadMore('load-more-runs'", html)
-        self.assertIn("loadMoreDomainStrategies", html)
-        self.assertIn("loadMoreCommonStrategies", html)
-        self.assertNotIn("loadAllDomainStrategies", html)
-        self.assertNotIn("loadAllCommonStrategies", html)
-        self.assertIn('data-action="${esc(action)}"', html)
-        self.assertIn("Загрузить еще", html)
-        self.assertIn("refreshDomainIndex(false)", html)
-        self.assertIn("refreshRuns(false)", html)
-        self.assertIn("const API_ENDPOINTS = Object.freeze", html)
-        self.assertNoLegacyUiApi(html)
-        self.assertIn("candidateDomainIndexPage: '/api/web/candidate-domain-index-page'", html)
-        self.assertIn("strategyCandidatesPage: '/api/web/strategy-candidates-page'", html)
-        self.assertIn("runHistoryPage: '/api/web/runs/history-page'", html)
-        self.assertIn("latestLog: '/api/core/runs/latest-log'", html)
-        self.assertIn("apiUrl('web', 'candidateDomainIndexPage', params)", html)
-        self.assertIn("apiUrl('web', 'strategyCandidatesPage', candidateParams", html)
-        self.assertIn("apiUrl('web', 'runHistoryPage', runParams", html)
-        self.assertIn("apiEndpoint('core', 'latestLog')", html)
-        self.assertNotIn("getJson('/api/strategy-finder/latest-log')", html)
-        self.assertNotIn(".slice(0, 12)", html)
-
-    def test_refresh_does_not_prefetch_candidates_before_candidates_tab_is_opened(self) -> None:
-        html = index_html()
-
-        self.assertIn("if (state.activeTab === 'candidates') ensureCandidateViewLoaded();", html)
-        self.assertNotIn("if (!state.candidateDomainsLoaded) refreshDomainIndex();\n    else if", html)
-
-    def test_web_color_hierarchy_uses_semantic_roles_without_changing_actions(self) -> None:
-        """WEBC-001..008/T01..T05: color is semantic, with text and a marker."""
-        html = index_html()
-
-        root_css = html[html.index(":root {"):html.index("}\n* {", html.index(":root {"))]
-        allowed_base_tokens = {
-            "--surface": "#1b2434", "--surface-soft": "#202b3d", "--surface-code": "#0f1623",
-            "--surface-code-gutter": "#151d2b", "--line": "rgba(255, 255, 255, .08)",
-            "--line-strong": "#3a4658", "--text-soft": "#949b9f", "--blue": "#0097dc",
-            "--blue-strong": "#5cc8ff", "--green": "#22c55e", "--green-soft": "rgba(34, 197, 94, .14)",
-            "--amber": "#f59e0b", "--amber-soft": "rgba(245, 158, 11, .14)",
-            "--red": "#ef4444", "--red-soft": "rgba(239, 68, 68, .14)",
-            "--code-text": "#d7e0ea", "--code-muted": "#6f7a89",
-        }
-        for token, value in allowed_base_tokens.items():
-            self.assertIn(f"{token}: {value};", root_css)
-        palette_values = set(re.findall(r"--[a-z-]+:\s*(#[0-9a-f]{6}|rgba\([^;]+\));", root_css))
-        self.assertEqual(palette_values, set(allowed_base_tokens.values()))
-        css = html[html.index("<style>") : html.index("</style>", html.index("<style>"))]
-        allowed_component_literals = set(allowed_base_tokens.values()) | {
-            "#161c27", "#e6edf3", "#eed09a",
-            "rgba(0, 0, 0, .3)", "rgba(255, 174, 66, .65)", "rgba(83, 221, 133, .65)",
-            "rgba(255, 76, 86, .75)", "rgba(83, 221, 133, .8)", "rgba(83, 221, 133, .18)",
-            "rgba(255, 76, 86, .8)", "rgba(255, 76, 86, .16)", "rgba(0, 0, 0, .28)",
-            "rgba(120, 211, 255, .35)", "rgba(23, 33, 43, .16)", "rgba(255, 255, 255, .03)",
-        }
-        literal_colors = set(re.findall(r"#[0-9a-fA-F]{6}|rgba\([^)]*\)", css))
-        self.assertTrue(literal_colors <= allowed_component_literals, literal_colors - allowed_component_literals)
-
-        for alias in ("--text", "--muted", "--accent", "--warn", "--danger", "--surface-strong"):
-            self.assertRegex(html, rf"{re.escape(alias)}:\s*var\(")
-        self.assertIn("--mono: Menlo", html)
-        self.assertNotIn("linear-gradient", html)
-        self.assertNotIn("#ffffff", html)
-        self.assertIn("button[data-action=\"stop-current\"]", html)
-        self.assertIn("button[data-backup-delete]", html)
-        self.assertNotIn('danger[data-action="preset-editor-delete"]', html)
-        self.assertIn("queued: 'queue'", html)
-        self.assertIn("queue: 'В очереди'", html)
-        self.assertIn(".status-marker.queue, .status-marker.pending { background: var(--accent); }", html)
-        self.assertIn("function statusBadge(text, tone)", html)
-        self.assertIn("return `<span class=\"badge\">${esc(text)}</span>`;", html)
-        self.assertIn("status-badge.queue", html)
-        self.assertIn(".message.queue, .toast.queue, .status-badge.queue, .event-card.queue", html)
-        self.assertIn("color: var(--surface-code)", html)
-        self.assertIn("Найденные стратегии сохранятся", html)
-        self.assertIn("Восстановление заменит текущие данные", html)
-        self.assertIn("backup-danger-zone", html)
-        self.assertIn("Архив и его файлы будут удалены", html)
-        self.assertIn("function setStatusContent(node, text, tone)", html)
-        self.assertIn('marker.setAttribute(\'aria-hidden\', \'true\')', html)
-        self.assertIn("function statusMarkup(text, tone)", html)
-        self.assertIn("function setBadge(node, text, tone)", html)
-        self.assertIn("setBadge(badgeNode, summary.readiness.text, summary.readiness.tone)", html)
-        self.assertIn("setBadge(jobBadge, action.text, action.tone)", html)
-        self.assertIn("setBadge(badgeNode, status, statusTone[status] || '')", html)
-
-    def test_index_html_is_focused_on_strategy_finder_only(self) -> None:
-        html = index_html()
-
-        self.assertIn("<title>GP Control Plane</title>", html)
-        self.assertIn("Подбор стратегий zapret2", html)
-        self.assertIn("GP Control Plane · локальная web panel · Linux host", html)
-        self.assertNotIn("Raspberry Pi · blockcheck2 · live-лог", html)
-        self.assertIn('<div class="metric-label">Система</div>', html)
-        self.assertIn('<div class="metric-label">Подбор</div>', html)
-        self.assertNotIn('<div class="metric-label">zapret2</div>', html)
-        self.assertNotIn('<div class="metric-label">Задание</div>', html)
-        self.assertIn("nextActionStatus", html)
-        self.assertIn("Можно запускать", html)
-        self.assertIn("Требуется настройка", html)
-        self.assertIn("Есть ошибка", html)
-        self.assertIn("Запуск поиска", html)
-        self.assertIn("Найденные стратегии", html)
-        self.assertIn("История запусков", html)
-        self.assertIn("data-tab=\"history\"", html)
-        self.assertIn("data-tab-page=\"history\"", html)
-        self.assertIn("data-tab=\"candidates\"", html)
-        self.assertIn("data-tab=\"terminal\"", html)
-        self.assertNotIn("data-tab=\"backups\"", html)
-        self.assertNotIn("data-tab-page=\"backups\"", html)
-        self.assertIn("data-tab=\"settings\"", html)
-        self.assertIn("data-tab-page=\"settings\"", html)
-        self.assertIn("Бекапы", html)
-        self.assertIn("settings-backups-panel", html)
-        self.assertIn("Создать бекап сейчас", html)
-        self.assertIn("backups-table", html)
-        self.assertIn("refreshBackups", html)
-        self.assertIn("/api/core/backups/list", html)
-        self.assertIn("/api/core/backups/create", html)
-        self.assertIn("/api/core/backups/restore", html)
-        self.assertIn("/api/core/backups/delete", html)
-        self.assertIn("/api/core/backups/upload", html)
-        self.assertIn("/api/core/backups/download-archive", html)
-        self.assertNotIn("/api/core/backups/download-file", html)
-        self.assertIn("backupDownloadUrl", html)
-        self.assertIn("apiUrl('core', 'backupsDownloadArchive', params)", html)
-        self.assertIn("backupsDownloadArchive", html)
-        self.assertNotIn("backupsDownloadFile", html)
-        self.assertIn("backupListFromPayload", html)
-        self.assertIn("backup-upload-panel", html)
-        self.assertIn("backup-downloads", html)
-        self.assertIn("backup-archive-link", html)
-        self.assertNotIn("backup-file-links", html)
-        self.assertIn("backup-upload-file", html)
-        # WEBL-017/T09: clean-install vault stays a backend/installer path,
-        # never an ordinary-panel operation.  The dedicated HTTP contract tests
-        # above deliberately continue to cover that retained backend surface.
-        for marker in (
-            "Vault для чистой установки",
-            "clean-install-vault",
-            "cleanInstallVault",
-            "create-clean-install-vault",
-            "refresh-clean-install-vaults",
-            "data-clean-install-vault-restore",
-        ):
-            self.assertNotIn(marker, html)
-        # WEBL-F08: the entire ordinary Web document, including visible copy,
-        # must not leak the clean-install concept under a new client-side name.
-        self.assertNotRegex(html, r"(?i)vault")
-        self.assertNotIn("window.prompt(", html)
-        self.assertNotIn("Токен подтверждения", html)
-        self.assertNotIn("одноразовый токен", html)
-        self.assertNotIn("confirmation_token", html)
-        self.assertNotIn("handoff_secret", html)
-        self.assertNotIn("cleanInstallVaultToken", html)
-        self.assertNotIn("postJson('/api/backups/create'", html)
-        self.assertNotIn("postJson('/api/backups/restore'", html)
-        self.assertNotIn("postJson('/api/backups/delete'", html)
-        self.assertNotIn("fetch('/api/backups/upload'", html)
-        self.assertIn("app-version-badge", html)
-        self.assertIn("authFetch", html)
-        self.assertIn("Authorization: `Bearer ${token}`", html)
-        self.assertIn("requestUrl", html)
-        self.assertIn("AUTH_TOKEN_KEY", html)
-        self.assertNotIn("authUrl", html)
-        self.assertNotIn("web-auth-badge", html)
-        self.assertNotIn("WEB_AUTH", html)
-        self.assertNotIn("X-GP-Token", html)
-        self.assertNotIn("gp_token", html)
-        self.assertNotIn("settings-version", html)
-        self.assertIn("settings-enable-ipv6", html)
-        self.assertIn("settings-debug-stdout", html)
-        self.assertIn("settings-discovery-panel", html)
-        self.assertIn("Подробный debug-лог stdout", html)
-        self.assertIn("может увеличить запись на диск", html)
-        self.assertIn("settings-release-panel", html)
-        self.assertIn("settings-release-current", html)
-        self.assertIn("settings-release-stable", html)
-        self.assertIn("settings-release-prerelease", html)
-        self.assertIn("release-version-link", html)
-        self.assertIn("data-action=\"check-releases\"", html)
-        self.assertIn("/api/service/releases/available", html)
-        self.assertNotIn("/api/service/releases/install-channel", html)
-        self.assertNotIn("/api/service/releases/set-install-channel", html)
-        self.assertNotIn("/api/service/releases/install-plan", html)
-        self.assertNotIn("/api/service/releases/install", html)
-        self.assertNotIn("getJson(`/api/releases?", html)
-        self.assertNotIn("postJson('/api/releases/update'", html)
-        self.assertNotIn("releaseUpdate", html)
-        self.assertIn("checkReleases({ silent: true })", html)
-        self.assertIn("чистая установка по точному тегу", html)
-        self.assertNotIn("Релизы еще не проверялись. Обновление из UI", html)
-        self.assertNotIn("Установить выбранное обновление", html)
-        self.assertIn("debug_stdout", html)
-        self.assertIn("/api/core/run-settings", html)
-        self.assertIn("/api/core/run-settings/save", html)
-        self.assertIn("fetchSettingsPayload", html)
-        self.assertIn("saveSettingsPayload", html)
-        self.assertNotIn("postJson('/api/settings'", html)
-        self.assertNotIn("getJson('/api/settings'", html)
-        self.assertNotIn("/api/discovery-profiles", html)
-        self.assertIn("discovery-profile-select", html)
-        self.assertIn("DISCOVERY_PROFILES", html)
-        self.assertNotIn("settings-preset-select", html)
-        self.assertNotIn("settings-preset-note", html)
-        self.assertIn("/api/web/run-preferences", html)
-        self.assertIn("runPreferences", html)
-        self.assertNotIn("postJson('/api/run-preferences'", html)
-        self.assertIn("useRunPreferencesOnce", html)
-        self.assertIn("saveRunPreferencesNow", html)
-        self.assertNotIn("scheduleRunPreferencesSave", html)
-        self.assertNotIn("settings-default-settings-preset", html)
-        self.assertNotIn("SETTINGS_PRESETS", html)
-        self.assertNotIn("setSettingsPreset", html)
-        self.assertIn("run-selected-discovery", html)
-        self.assertIn("Все домены на одной стратегии", html)
-        self.assertIn("useDiscoveryProfile", html)
-        self.assertNotIn("discovery-profile-name", html)
-        self.assertNotIn("saveDiscoveryProfile", html)
-        self.assertNotIn("deleteDiscoveryProfile", html)
-        self.assertIn("/api/core/presets/v2fly/categories", html)
-        self.assertIn("/api/core/presets/v2fly/category-domains", html)
-        self.assertIn("apiUrl('core', 'v2flyCategories', params)", html)
-        self.assertIn("apiUrl('core', 'v2flyCategoryDomains', params)", html)
-        self.assertIn("apiEndpoint('web', 'presetSave')", html)
-        self.assertNotIn("getJson(`/api/domain-sources/v2fly/categories?", html)
-        self.assertIn("v2fly-category-search", html)
-        self.assertIn("v2fly-category-status", html)
-        self.assertIn("v2fly-category-matches", html)
-        self.assertIn("v2fly-domains", html)
-        self.assertIn("suggestV2flyPresetName", html)
-        self.assertIn("data-action=\"v2fly-load-categories\"", html)
-        self.assertIn("data-action=\"v2fly-update-local-storage\"", html)
-        self.assertIn("data-action=\"v2fly-select-category\"", html)
-        self.assertIn("v2fly-preset-name", html)
-        self.assertIn("v2fly-preview-result", html)
-        self.assertIn("не гарантия полного покрытия сервиса", html)
-        self.assertIn("renderV2flyCategoryCatalog", html)
-        self.assertIn("loadV2flyCategories", html)
-        self.assertIn("previewV2flyPreset", html)
-        self.assertIn("importV2flyPreset", html)
-        self.assertIn("setV2flyLocalError", html)
-        self.assertIn("function clearV2flyDomains", html)
-        self.assertIn("clearV2flyDomains();", html)
-        self.assertIn("Локальный каталог v2fly", html)
-        self.assertNotIn("params.set('check'", html)
-        self.assertNotIn("params.set('refresh'", html)
-        self.assertNotIn("Ошибка проверки v2fly: ${error.message}`, 'bad'", html)
-        self.assertNotIn("Ошибка сохранения v2fly: ${error.message}`, 'bad'", html)
-        self.assertIn("state.presetManager.name = payload.name;", html)
-        self.assertIn("await lifetime.result(loadPresetEditorFromSelection({ silent: true }), viewRequest);", html)
-        self.assertNotIn("v2fly-scope", html)
-        self.assertNotIn("v2fly-categories", html)
-        self.assertNotIn("v2fly-category-list", html)
-        self.assertNotIn("data-v2fly-category", html)
-        self.assertNotIn("domain/full", html)
-        self.assertIn("uniqueDomainCount", html)
-        self.assertNotIn("backup-file-links", html)
-        self.assertIn("Восстановить из бекапа", html)
-        self.assertIn("Удалить бекап", html)
-        self.assertIn("data-backup-restore", html)
-        self.assertIn("data-backup-delete", html)
-        self.assertNotIn("backup-restore-select", html)
-        self.assertNotIn("backup-restore-preview", html)
-
-        self.assertNotIn("data-action=\"restore-selected-backup\"", html)
-        self.assertIn("restoreBackup", html)
-        self.assertIn("deleteBackup", html)
-        self.assertNotIn("refreshBackupRestorePreview", html)
-        self.assertNotIn("renderBackupRestorePreview", html)
-        self.assertIn("/api/web/presets", html)
-        self.assertIn("/api/web/presets/save", html)
-        self.assertIn("/api/web/presets/delete-user-lists", html)
-        self.assertIn("/api/web/presets/domains", html)
-        self.assertIn("apiEndpoint('web', 'presets')", html)
-        self.assertIn("apiEndpoint('web', 'presetSave')", html)
-        self.assertIn("apiEndpoint('web', 'presetDeleteUserLists')", html)
-        self.assertIn("apiUrl('web', 'presetDomains', params)", html)
-        self.assertIn("domain-preset-manager-panel", html)
-        self.assertNotIn("profiles-manager-panel", html)
-        self.assertNotIn("settings-presets-manager-panel", html)
-        self.assertNotIn("preset-manager-scope", html)
-        self.assertIn("preset-manager-name", html)
-        self.assertNotIn("preset-manager-query", html)
-        self.assertNotIn("preset-domain-list", html)
-        self.assertNotIn("preset-domain-row", html)
-        self.assertNotIn("preset-editor-name", html)
-        self.assertIn("preset-editor-domains", html)
-        self.assertIn("preset-editor-preview", html)
-        self.assertIn("preset-new-name", html)
-        self.assertIn("preset-new-domains", html)
-        self.assertIn("data-action=\"preset-new-save\"", html)
-        self.assertIn("data-action=\"preset-editor-delete\"", html)
-        self.assertIn("savePresetNew", html)
-        self.assertIn("deletePresetEditor", html)
-        self.assertIn("Создать новый список", html)
-        self.assertIn("system:required", html)
-        self.assertIn("systemPresets", html)
-        self.assertIn("systemPresetMeta", html)
-        self.assertIn("fetchAllPresetDomains", html)
-        self.assertIn("function hasCustomPreset(target, name)", html)
-        self.assertIn("function managerPresetEntries()", html)
-        self.assertIn("function managerPresetEntry(name)", html)
-        self.assertIn("const builtin = builtInPresets(target).find((item) => item.key === name);", html)
-        self.assertIn("if (builtin) return uniqueDomains(builtin.domains);", html)
-        self.assertNotIn("refreshPresetManager", html)
-        self.assertNotIn("togglePresetDomain", html)
-        self.assertIn("loadPresetEditorFromSelection", html)
-        self.assertNotIn("previewPresetEditor", html)
-        self.assertIn("savePresetEditor", html)
-        self.assertIn("exportPresetEditor", html)
-        self.assertIn("customPresetMeta", html)
-        self.assertNotIn("Показать домены", html)
-        self.assertNotIn("Показать изменения", html)
-        self.assertIn("Скачать TXT", html)
-        self.assertIn("candidateGroups(rows)", html)
-        self.assertIn("data-candidate-view=\"domain\"", html)
-        self.assertIn("data-candidate-view=\"common\"", html)
-        self.assertIn("domain-group", html)
-        self.assertIn("protocol-group", html)
-        self.assertIn("domain-strategy-box", html)
-        self.assertIn("strategy-editor", html)
-        self.assertIn("strategy-code", html)
-        self.assertIn("line-numbers", html)
-        self.assertIn("line-numbered-textarea", html)
-        self.assertIn("text-editor", html)
-        self.assertIn("STRATEGY_LIST_LIMIT", html)
-        self.assertIn("expandedStrategyLists", html)
-        self.assertIn("strategyEditorScrolls", html)
-        self.assertIn("strategyListState", html)
-        self.assertIn("normalizeStrategyArg", html)
-        self.assertNotIn("FRAGMENTATION_CLASSES", html)
-        self.assertNotIn("candidate-filter-row", html)
-        self.assertNotIn("candidate-hide-risky", html)
-        self.assertNotIn("data-fragmentation-class=\"position_risky\"", html)
-        self.assertNotIn("fragmentationBadge", html)
-        self.assertIn("strategyFamilyGroups", html)
-        self.assertIn("strategyDisplayFamilyKey", html)
-        self.assertIn("return `${protocol}:${family}`;", html)
-        self.assertIn("strategy-family-list", html)
-        self.assertIn("strategy-family-reason", html)
-        self.assertNotIn("appendCandidateFilters", html)
-        self.assertIn("loadMoreDomainStrategies", html)
-        self.assertIn("loadMoreCommonStrategies", html)
-        self.assertNotIn("loadAllDomainStrategies", html)
-        self.assertNotIn("loadAllCommonStrategies", html)
-        self.assertIn("Загрузить еще общие стратегии", html)
-        self.assertIn("domainFromStrategyListKey", html)
-        self.assertIn("isCommonStrategyListKey", html)
-        self.assertIn("Загрузить еще стратегии домена", html)
-        self.assertIn("data-strategy-list-toggle", html)
-        self.assertIn("data-strategy-remote-more", html)
-        self.assertIn("button.dataset.strategyRemoteMore === 'true'", html)
-        self.assertIn("data-strategy-code-key", html)
-        self.assertIn("rememberStrategyEditorScrolls", html)
-        self.assertIn("restoreStrategyEditorScrolls", html)
-        self.assertIn("strategyEditorScrollKey", html)
-        self.assertIn("updateEditorLineNumbers", html)
-        self.assertIn("data-line-numbers-for=\"finder-domains\"", html)
-        self.assertIn("data-line-numbers-for=\"common-domains\"", html)
-        self.assertIn("color-scheme: dark", html)
-        self.assertIn("#161c27", html)
-        self.assertIn("#1b2434", html)
-        self.assertIn("#0097dc", html)
-        self.assertIn("dynamicCommonRows", html)
-        self.assertIn("selectedFinderDomains", html)
-        self.assertIn("selectedCommonDomains", html)
-        self.assertIn("candidateKnownVersion", html)
-        self.assertIn("candidateCacheValid", html)
-        self.assertIn("syncCandidateVersion", html)
-        self.assertIn("Object.keys(value).sort().map", html)
-        self.assertNotIn("value.mtime_ns || 0", html)
-        self.assertIn("invalidateCandidateCaches", html)
-        self.assertIn("common-controls", html)
-        self.assertIn(".common-filter-panel .preset-grid", html)
-        self.assertIn("common-domains", html)
-        self.assertIn("tested-domain-options", html)
-        self.assertIn("common-domain-add", html)
-        self.assertIn("common-domain-suggestions", html)
-        self.assertIn("data-common-domain-suggestion", html)
-        self.assertIn("commonDomainSuggestions", html)
-        self.assertIn("renderCommonDomainSuggestions", html)
-        self.assertIn("finder-preset-select", html)
-        self.assertIn("common-preset-select", html)
-        self.assertIn("CUSTOM_SELECT_VALUE", html)
-        self.assertIn("markDomainPresetCustom", html)
-        self.assertIn("markDiscoveryProfileCustom", html)
-        self.assertIn("discovery-profile-note", html)
-        self.assertIn("multi-curl-field", html)
-        self.assertIn("zapretCompactStatus", html)
-        self.assertIn("compact-status", html)
-        self.assertIn("optgroup label=\"Персональные\"", html)
-        self.assertIn("label: 'Обязательные'", html)
-        self.assertIn("label: 'Сервисы'", html)
-        self.assertIn("label: 'Готовые наборы'", html)
-        self.assertNotIn("label: 'Диагностика'", html)
-        self.assertIn("label: 'Протестированные'", html)
-        self.assertNotIn("data-preset-use=\"finder\"", html)
-        self.assertNotIn("data-preset-use=\"common\"", html)
-        self.assertNotIn("data-action=\"use-discovery-profile\"", html)
-        self.assertNotIn("data-preset-save=\"common\"", html)
-        self.assertNotIn("data-preset-delete=\"common\"", html)
-        self.assertIn("CUSTOM_PRESETS_KEY", html)
-        self.assertIn("localStorage", html)
-        self.assertIn("testedDomains()", html)
-        self.assertIn("domainsTouched", html)
-        self.assertIn("domainsInitialized", html)
-        self.assertIn("id=\"toast\"", html)
-        self.assertIn("showToast", html)
-        self.assertIn("progress-fill", html)
-        self.assertIn("progress-attempted", html)
-        self.assertIn("progress-strategies", html)
-        self.assertIn("progress-successful", html)
-        self.assertIn("progress-phase", html)
-        self.assertIn("progress-elapsed", html)
-        self.assertIn("progress-metrics", html)
-        self.assertIn("phaseLabel", html)
-        self.assertIn("renderRunSettingsSummary", html)
-        self.assertIn("run_settings", html)
-        self.assertIn("attempt_total", html)
-        self.assertIn("strategy_total", html)
-        self.assertIn("eta_estimate_ms_per_attempt", html)
-        self.assertIn("расчитанное среднее время попытки", html)
-        self.assertNotIn("curl: ${processes.curl", html)
-        self.assertIn("progressLiveElapsedSeconds(progress)", html)
-        self.assertIn("progressLiveEtaSeconds(progress)", html)
-        self.assertIn("runCandidateCount(row)", html)
-        self.assertIn("runProgressText(row)", html)
-        self.assertIn("data-action=\"run-selected-discovery\"", html)
-        self.assertNotIn("data-action=\"multi-domain-discovery\"", html)
-        self.assertNotIn("data-action=\"standard-discovery\"", html)
-        self.assertIn("/api/core/strategy-discovery/start-run", html)
-        self.assertIn("/api/core/strategy-discovery/stop-current-run", html)
-        self.assertIn("coreStrategyDiscoveryPayload", html)
-        self.assertIn("startStrategyDiscoveryRun", html)
-        self.assertNotIn("/api/jobs/zapret-multi-domain-discovery", html)
-        self.assertNotIn("/api/jobs/zapret-standard-discovery", html)
-        self.assertNotIn("/api/jobs/stop-current", html)
-        self.assertIn("curl-parallelism", html)
-        self.assertNotIn('id="curl-parallelism" type="number" min="1" max="10"', html)
-        self.assertNotIn("id=\"settings-curl-max\" type=\"number\" min=\"1\" max=\"10\"", html)
-        self.assertIn("Можно ставить любое число от 1", html)
-        self.assertIn("value=\"4\"", html)
-        self.assertIn("curlParallelism()", html)
-        self.assertIn("curl_parallelism", html)
-        self.assertIn("enable-http", html)
-        self.assertIn("enable-tls12", html)
-        self.assertIn("enable-tls13", html)
-        self.assertIn("include-quic", html)
-        self.assertIn("scan-level", html)
-        self.assertIn("repeats", html)
-        self.assertIn("repeat-parallel", html)
-        self.assertIn("skip-dnscheck", html)
-        self.assertIn("skip-ipblock", html)
-        self.assertIn("Расширенные параметры", html)
-        self.assertIn("run-curl-max-time", html)
-        self.assertIn("run-curl-max-time-quic", html)
-        self.assertIn("run-curl-max-time-doh", html)
-        self.assertIn("runTimeoutSettings()", html)
-        self.assertIn("RUN_TIMEOUT_CONTROL_IDS", html)
-        self.assertIn("saveLaunchTimeoutDefaultsNow", html)
-        self.assertNotIn("settings-curl-max-time", html)
-        self.assertNotIn("settings-curl-max-time-quic", html)
-        self.assertNotIn("settings-curl-max-time-doh", html)
-        self.assertIn("discoveryOptions()", html)
-        self.assertIn("hasEnabledProtocol", html)
-        self.assertIn("enable_http", html)
-        self.assertIn("enable_tls12", html)
-        self.assertIn("enable_tls13", html)
-        self.assertIn("scan_level", html)
-        self.assertIn("repeat_parallel", html)
-        self.assertIn("skip_dnscheck", html)
-        self.assertIn("skip_ipblock", html)
-        self.assertNotIn("Пресет настроек", html)
-        self.assertIn("limit-time-enabled", html)
-        self.assertIn("time-limit-panel", html)
-        self.assertIn("time-limit-field", html)
-        self.assertIn("timeoutSecondsOrNull", html)
-        self.assertIn("syncTimeLimitUi()", html)
-        self.assertIn("data-tooltip=\"Запускает штатную проверку стратегий", html)
-        self.assertIn("data-tooltip=\"Одна стратегия запускается один раз", html)
-        self.assertIn("grid-template-columns: minmax(0, 460px) minmax(0, 1fr)", html)
-        self.assertIn("grid-template-columns: minmax(0, 1fr)", html)
-        self.assertNotIn(".finder-layout {\n  grid-template-columns: minmax(0, 520px);\n  max-width: 560px;\n}", html)
-        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))", html)
-        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))", html)
-        self.assertIn(".time-limit-row { grid-template-columns: 1fr; }", html)
-        self.assertIn("class=\"button-row run-actions\"", html)
-        self.assertIn("min-width: 760px", html)
-        self.assertIn("table-layout: auto", html)
-        self.assertIn(".run-history", html)
-        self.assertIn(".run-card-main", html)
-        self.assertIn(".run-card-actions", html)
-        self.assertIn(".run-card-status-success", html)
-        self.assertIn(".run-card-status-timeout", html)
-        self.assertIn(".run-card-kind-multi", html)
-        self.assertIn("runSettingsText", html)
-        self.assertIn("runPayload", html)
-        self.assertIn("repeatRun", html)
-        self.assertIn("data-run-repeat", html)
-        self.assertIn("Повторить с этими настройками", html)
-        self.assertIn(".run-domain-list", html)
-        self.assertIn(".run-domain-chip", html)
-        self.assertIn(".run-domains-preview", html)
-        self.assertIn(".run-domains-count", html)
-        self.assertIn(".run-domains-arrow", html)
-        self.assertIn(".run-domains[open]", html)
-        self.assertIn("openRunDomains", html)
-        self.assertIn("data-run-domains", html)
-        self.assertIn("renderRunCard(row)", html)
-        self.assertIn("runCardClass(row)", html)
-        self.assertIn("runDomainKey(row)", html)
-        self.assertIn("служба с повышенными правами", html)
-        self.assertIn("metric-job-card", html)
-        self.assertIn("/api/web/events/stream", html)
-        self.assertIn('this._api.streamSse(this._url()', html)
-        self.assertIn("response.body.getReader()", html)
-        self.assertNotIn("new EventSource(", html)
-        self.assertIn("startRealtimeEvents", html)
-        self.assertIn("startRealtimeFallback", html)
-        self.assertIn("stdout_size", html)
-        self.assertIn("mergeLogPayload", html)
-        self.assertIn("30000", html)
-        self.assertIn("refresh({ light: true, silent: true })", html)
-        self.assertIn("function refreshRequestMap(light)", html)
-        self.assertIn("Promise.allSettled", html)
-        self.assertIn("const status = settledValue(results, 'status');", html)
-        self.assertIn("if (hasCompleteSystemStatus(status)) {", html)
-        self.assertIn("clearInitialSystemStatusRetry();", html)
-        self.assertIn("mergeStatusPayload(status);", html)
-        self.assertIn("const finderRuns = settledValue(results, 'finderRuns');", html)
-        self.assertIn("if (finderRuns) mergeRunPage(finderRuns, true);", html)
-        self.assertIn("refreshFailureMessages(results)", html)
-        self.assertIn("'Частичная ошибка обновления'", html)
-        self.assertIn("renderAll({ skipCandidates: true })", html)
-        self.assertNotIn("setInterval(refresh, 5000)", html)
-        self.assertNotIn(
-            "const [status, finderRuns, finderLog, domainSets, presets, settings, domainSources] = await Promise.all",
-            html,
-        )
-        self.assertIn("statusCheck", html)
-        self.assertIn("zapretDiagnostics", html)
-        self.assertIn("status-check-message", html)
-        self.assertIn("testedDomainCount", html)
-        self.assertIn("lastCandidateDomainTotal", html)
-        self.assertNotIn("metric-last-run", html)
-        self.assertNotIn("Последний запуск", html)
-        self.assertNotIn("data-action=\"refresh\"", html)
-        self.assertNotIn("Обновить данные", html)
-        self.assertIn("runStatusLabel(status)", html)
-        self.assertIn("metricJobNoteText(ready, busy, jobStatus, status)", html)
-        self.assertNotIn("jobDetails.push", html)
-        self.assertNotIn("этап: ${phase}", html)
-        self.assertIn("etaModeLabel(progress)", html)
-        self.assertIn("loading-skeleton", html)
-        self.assertIn("candidateLoading", html)
-        self.assertIn("candidateUpdatedAt", html)
-        self.assertIn("backupsLoading", html)
-        self.assertIn("backupsUpdatedAt", html)
-        self.assertNotIn("renderWebAuthStatus", html)
-        self.assertIn("friendlyTime", html)
-        self.assertIn("backups-updated-at", html)
-        self.assertIn("останавливается", html)
-        self.assertIn("остановлено", html)
-        self.assertIn("сохраняются результаты", html)
-        self.assertIn("ошибка сохранения", html)
-        self.assertIn("runDomains(row, domainKey)", html)
-        self.assertIn("runDomainChips(domains)", html)
-        self.assertIn("runDiagnosticsSummary(row)", html)
-        self.assertIn("runDiagnostics(row)", html)
-        self.assertIn(".run-diagnostics", html)
-        self.assertIn(".run-diagnostic-table", html)
-        self.assertIn("diagnosticTableRow", html)
-        self.assertIn("diagnosticShortLabel", html)
-        self.assertIn("diagnosticExplanation", html)
-        self.assertIn("curlCodeLabel", html)
-        self.assertIn("curlCodeDetails", html)
-        self.assertIn(".run-diagnostic-tech", html)
-        self.assertIn("технически", html)
-        self.assertIn("Это не отменяет найденные стратегии", html)
-        self.assertNotIn(".run-diagnostic-chip", html)
-        self.assertNotIn("Коды curl показывают", html)
-        self.assertIn("details.run-domains[data-run-domains]", html)
-        self.assertIn("white-space: nowrap", html)
-        self.assertIn("isDiscoveryRun(row)", html)
-        self.assertIn("runMode(row)", html)
-        self.assertIn("data-action=\"stop-current\"", html)
-        self.assertIn("Терминал", html)
-        self.assertIn("scrollLogToBottom", html)
-        self.assertIn("state.activeTab === 'terminal'", html)
-        self.assertIn("runSummary(row)", html)
-        self.assertIn("latestById", html)
-        self.assertNotIn("Задания подбора", html)
-        self.assertNotIn("Запуски с находками", html)
-        self.assertNotIn("candidate-runs-table", html)
-        self.assertNotIn("jobs-table", html)
-        self.assertNotIn("table('finder-runs-table'", html)
-        self.assertNotIn("jobSummary(row)", html)
-        self.assertNotIn("effectiveJobStatus(row)", html)
-        self.assertNotIn("{label: 'Лог'", html)
-        self.assertNotIn("{label: 'Детали'", html)
-        self.assertNotIn("JSON.stringify(row.result)", html)
-        self.assertNotIn("data-candidate-verify", html)
-        self.assertNotIn("candidateCopyGroups", html)
-        self.assertNotIn("registerCopyText", html)
-        self.assertNotIn("strategy-textarea", html)
-        self.assertNotIn("strategyText", html)
-        self.assertNotIn("strategyItem", html)
-        self.assertNotIn("strategy-item", html)
-        self.assertNotIn("data-copy-scope", html)
-        self.assertNotIn("data-copy-candidate-id", html)
-        self.assertNotIn("copyTextForButton", html)
-        self.assertNotIn("copy-fallback", html)
-        self.assertNotIn("showCopyFallback", html)
-        self.assertNotIn("Копировать группу", html)
-        self.assertNotIn("Копировать стратегию", html)
-        self.assertNotIn("Копировать домен", html)
-        self.assertNotIn("candidate-message", html)
-        self.assertNotIn("setCandidateMessage", html)
-        self.assertNotIn("<code>nfqws2", html)
-        self.assertNotIn("{label: 'ID'", html)
-        self.assertNotIn("{label: 'Найдено'", html)
-        self.assertNotIn("Синхронизировать", html)
-        self.assertNotIn("dry-run", html)
-        self.assertNotIn("Браузер заблокировал буфер", html)
-        self.assertNotIn("Проверка домена", html)
-        self.assertNotIn("Проверки доступности", html)
-        self.assertNotIn("Технические данные", html)
-        self.assertNotIn("Фильтр по домену", html)
-        self.assertNotIn("Показать еще стратегии этого домена", html)
-        self.assertNotIn("data-domain-load-more", html)
-        self.assertNotIn("/api/rules", html)
-        self.assertNotIn("/api/strategies", html)
-        self.assertNotIn("/api/healthchecks", html)
-        self.assertNotIn("/api/jobs/validate", html)
-        self.assertNotIn("/api/jobs/sync-pull-only", html)
-        self.assertNotIn("/api/jobs/render-dry-run", html)
-        self.assertNotIn("/api/jobs/healthcheck-direct", html)
-        self.assertNotIn("/api/jobs/zapret-strategy-check", html)
-        self.assertNotIn("/api/jobs/zapret-custom-verification", html)
-
-    def test_v2fly_catalog_update_uses_the_existing_service_api_and_recovers_ui_state(self) -> None:
-        html = index_html()
-
-        self.assertIn("v2flyUpdateLocalStorage: '/api/service/v2fly/update-local-storage'", html)
-        self.assertIn("async function updateV2flyLocalStorage()", html)
-        self.assertIn("if (state.v2flyCatalogUpdateLoading) return;", html)
-        self.assertIn("state.v2flyCatalogUpdateLoading = true;", html)
-        self.assertIn("updateButton.textContent = state.v2flyCatalogUpdateLoading ? 'Загружаю каталог'", html)
-        self.assertIn("const controlsBlocked = isBusy() || !hasCompleteSystemStatus();", html)
-        self.assertIn("reloadButton.disabled = loading || state.v2flyCatalogUpdateLoading || controlsBlocked;", html)
-        self.assertIn("updateButton.disabled = state.v2flyCatalogUpdateLoading || controlsBlocked;", html)
-        self.assertIn("const v2flyCatalogAction = button.dataset.action === 'v2fly-load-categories' || button.dataset.action === 'v2fly-update-local-storage';", html)
-        self.assertIn("button.disabled = (v2flyCatalogAction && state.v2flyCatalogUpdateLoading) || controlsBlocked;", html)
-        self.assertIn("postJson(apiEndpoint('service', 'v2flyUpdateLocalStorage'), {})", html)
-        self.assertIn("async function loadV2flyCategories(refreshCatalog, { throwOnError = false } = {})", html)
-        self.assertIn("if (throwOnError) throw error;", html)
-        self.assertIn("await lifetime.result(loadV2flyCategories(true, { throwOnError: true }), viewRequest);", html)
-        self.assertIn("Каталог v2fly обновлен: ${groups} групп", html)
-        self.assertIn("const revisionWarning = String(result?.result?.revision_warning || '').trim();", html)
-        self.assertIn("Каталог v2fly готов: ${groups} групп, но ревизия источника не подтверждена: ${revisionWarning}", html)
-        self.assertIn("setMessage(`Каталог v2fly готов: ${groups} групп, но ревизия источника не подтверждена: ${revisionWarning}`, 'warn');", html)
-        self.assertIn("Не удалось загрузить каталог v2fly: ${message}", html)
-        self.assertIn("state.v2flyCatalogUpdateLoading = false;", html)
-        self.assertIn("button.dataset.action === 'v2fly-update-local-storage'", html)
-        self.assertIn("'button[data-action=\"v2fly-update-local-storage\"]'", html)
-        self.assertIn("Загрузить/обновить каталог v2fly", html)
-        self.assertIn("Перечитывает уже загруженный локальный каталог групп v2fly.", html)
-        self.assertNotIn("Каталог скачивается при установке или обновлении сервиса.", html)
-        self.assertNotIn("Повторите установку или обновление сервиса.", html)
-        self.assertNotIn("/api/web/v2fly", html)
-
-    def test_v2fly_catalog_update_browser_race_keeps_controls_locked_and_never_reports_false_success(self) -> None:
-        bootstrap = """
-localStorage.setItem('gp-control-plane-auth-token', 'test-token');
-window.__v2flyUpdateResolve = null;
-window.__failV2flyCategories = false;
-window.__v2flyUpdateWarning = false;
-window.fetch = (input) => {
-  const url = String(input instanceof Request ? input.url : input);
-  const response = (payload, status = 200) => Promise.resolve(new Response(JSON.stringify(payload), {status, headers: {'Content-Type': 'application/json'}}));
-  if (url.includes('/api/service/v2fly/update-local-storage')) {
-    if (window.__v2flyUpdateWarning) return response({status: 'success', storage: {group_count: 2}, result: {revision_warning: '<img src=x onerror=alert(1)>'}});
-    return new Promise((resolve) => { window.__v2flyUpdateResolve = () => resolve(new Response(JSON.stringify({status: 'success', storage: {group_count: 2}}), {status: 200, headers: {'Content-Type': 'application/json'}})); });
-  }
-  if (url.includes('/api/core/presets/v2fly/categories')) {
-    if (window.__failV2flyCategories) return response({error: {message: 'forced category reload failure'}}, 503);
-    return response({categories: [{name: 'youtube'}], storage: {state: 'ready', group_count: 1}});
-  }
-  if (url.includes('/api/web/status')) return response({state: 'idle', zapret2: {ready: true}});
-  if (url.includes('/api/web/runs/history-page')) return response({runs: [], total: 0, limit: 50, offset: 0, has_more: false});
-  return response({});
-};
-"""
-        probe = '<output id="v2fly-browser-probe"></output>'
-        with tempfile.TemporaryDirectory() as raw:
-            page = Path(raw) / "v2fly-ui-race.html"
-            html = index_html().replace("<script>", f"<script>{bootstrap}", 1).replace("</body>", f"{probe}</body>")
-            page.write_text(html, encoding="utf-8")
-            with PlaywrightPage() as browser_page:
-                browser_page.navigate(page.as_uri())
-                browser_page.wait_for(
-                    "bootstrapState === 'ready' && document.querySelector('[data-action=\"v2fly-update-local-storage\"]')",
-                    "bootstrapped v2fly controls",
-                )
-                browser_page.click("#tab-lists")
-                browser_page.click('[data-action="v2fly-update-local-storage"]')
-                browser_page.wait_for("document.querySelector('[data-action=\"v2fly-load-categories\"]').disabled && document.querySelector('[data-action=\"v2fly-update-local-storage\"]').disabled", "locked v2fly controls")
-                browser_page.evaluate("window.__failV2flyCategories = true; window.__v2flyUpdateResolve()")
-                browser_page.wait_for("!document.querySelector('[data-action=\"v2fly-update-local-storage\"]').disabled", "failed category reload clears update lock")
-                r02_r03 = browser_page.evaluate("!document.getElementById('message').textContent.includes('Каталог v2fly обновлен')")
-                active_run = browser_page.evaluate("(async () => { mergeStatusPayload({state: 'running', current_run: {run_id: 'run-1', status: 'running'}, zapret2: {ready: true}}); await loadV2flyCategories(true); return document.querySelector('[data-action=\"v2fly-load-categories\"]').disabled && document.querySelector('[data-action=\"v2fly-update-local-storage\"]').disabled; })()")
-                incomplete_status = browser_page.evaluate("(async () => { mergeStatusPayload({state: 'idle'}); await loadV2flyCategories(true); return document.querySelector('[data-action=\"v2fly-load-categories\"]').disabled && document.querySelector('[data-action=\"v2fly-update-local-storage\"]').disabled; })()")
-                warning = browser_page.evaluate("(async () => { mergeStatusPayload({state: 'idle', zapret2: {ready: true}}); window.__failV2flyCategories = false; window.__v2flyUpdateWarning = true; await updateV2flyLocalStorage(); const message = document.getElementById('message'); return message.textContent.includes('Каталог v2fly готов: 2 групп, но ревизия источника не подтверждена:') && message.textContent.includes('<img src=x onerror=alert(1)>') && !message.querySelector('img'); })()")
-        self.assertTrue(r02_r03)
-        self.assertTrue(active_run)
-        self.assertTrue(incomplete_status)
-        self.assertTrue(warning)
-
-    def test_int_browser_acknowledged_start_preserves_live_log_until_matching_terminal_history(self) -> None:
-        """INT-001/002: controlled transport orders log before a stale status response."""
-        bootstrap = """
-localStorage.setItem('gp-control-plane-auth-token', 'test-token');
-window.__int = {posts: 0, accepted: false, startError: false, startPending: true, logNew: false, terminal: false, pending: {}, sse: null, logUrls: []};
-window.__intResponse = (payload, status = 200) => Promise.resolve(new Response(JSON.stringify(payload), {status, headers: {'Content-Type': 'application/json'}}));
-window.__intEmit = (event, payload = {}) => window.__int.sse.enqueue(new TextEncoder().encode(`event: ${event}\\ndata: ${JSON.stringify(payload)}\\n\\n`));
-window.fetch = (input, options = {}) => {
-  const url = String(input instanceof Request ? input.url : input);
-  if (url.includes('/api/web/events/stream')) return Promise.resolve(new Response(new ReadableStream({start(controller) { window.__int.sse = controller; }}), {status: 200, headers: {'Content-Type': 'text/event-stream'}}));
-  if (url.includes('/api/core/strategy-discovery/start-run')) {
-    window.__int.posts += 1;
-    if (window.__int.startError) return window.__intResponse({error: {message: 'server-start-error'}}, 503);
-    const accept = () => {
-      window.__int.accepted = true;
-      return window.__intResponse({accepted: true, run_id: 'new-run'} , 202);
-    };
-    if (window.__int.startPending) return new Promise((resolve) => { window.__int.pending.start = () => resolve(accept()); });
-    return accept();
-  }
-  if (url.includes('/api/web/status')) {
-    if (window.__int.accepted) return new Promise((resolve) => { window.__int.pending.status = resolve; });
-    return window.__intResponse({state: 'idle', zapret2: {ready: true}, settings: {}, run_preferences: {}});
-  }
-  if (url.includes('/api/web/runs/history-page')) {
-    if (window.__int.accepted && !window.__int.terminal) return new Promise((resolve) => { window.__int.pending.history = resolve; });
-    return window.__intResponse({runs: window.__int.terminal ? [{id: 'new-run', run_id: 'new-run', status: 'success', timestamp: '2026-09-05T00:00:00Z'}] : [], total: window.__int.terminal ? 1 : 0, limit: 50, offset: 0, has_more: false});
-  }
-  if (url.includes('/api/core/runs/latest-log')) { window.__int.logUrls.push(url); return window.__intResponse(window.__int.logNew ? {run_id: 'new-run', status: 'running', stdout_log: 'new.out', stdout_size: 11, stdout_tail: 'first live line'} : {run_id: 'old-run', status: 'success', stdout_log: 'old.out', stdout_size: 3, stdout_tail: ''}); }
-  if (url.includes('/api/web/presets')) return window.__intResponse({custom: {}, system: {}, metadata: {}, system_metadata: {}});
-  if (url.includes('/api/core/run-settings')) return window.__intResponse({settings: {}});
-  return window.__intResponse({});
-};
-"""
-        with tempfile.TemporaryDirectory() as raw:
-            page = Path(raw) / "int-acknowledged-start.html"
-            page.write_text(index_html().replace("<script>", f"<script>{bootstrap}", 1), encoding="utf-8")
-            with PlaywrightPage() as browser_page:
-                browser_page.navigate(page.as_uri())
-                browser_page.wait_for("bootstrapState === 'ready' && window.__int.sse", "ready controlled INT transport")
-                browser_page.fill("#finder-domains", "youtube.com")
-                browser_page.click('[data-action="run-selected-discovery"]')
-                browser_page.wait_for("window.__int.posts === 1 && window.__int.pending.start", "pending start request")
-                in_flight = browser_page.evaluate("({startDisabled: document.querySelector('[data-action=\"run-selected-discovery\"]').disabled, stopDisabled: document.querySelector('[data-action=\"stop-current\"]').disabled, message: document.getElementById('message').textContent})")
-                browser_page.evaluate("window.__int.pending.start()")
-                browser_page.wait_for("document.getElementById('message').textContent.includes('Запуск подтверждён: new-run')", "accepted run acknowledgement")
-                browser_page.wait_for("window.__int.logUrls.some((url) => url.includes('run_id=new-run'))", "acknowledged run log request")
-                immediate = browser_page.evaluate("({posts: window.__int.posts, startDisabled: document.querySelector('[data-action=\"run-selected-discovery\"]').disabled, stopEnabled: !document.querySelector('[data-action=\"stop-current\"]').disabled, busy: document.getElementById('metric-job').textContent, queuedLog: document.getElementById('finder-log').textContent, logRunId: state.finderLog?.run_id || null, acknowledgedLogRequest: window.__int.logUrls.some((url) => url.includes('run_id=new-run'))})")
-                browser_page.evaluate("document.querySelector('[data-action=\"run-selected-discovery\"]').click(); window.__int.logNew = true; window.__intEmit('log')")
-                browser_page.wait_for("document.getElementById('finder-log').textContent.includes('first live line')", "log SSE before status")
-                browser_page.evaluate("window.__int.pending.status(new Response(JSON.stringify({state: 'idle', zapret2: {ready: true}}), {status: 200, headers: {'Content-Type': 'application/json'}})); window.__int.pending.history(new Response(JSON.stringify({runs: [], total: 0, limit: 50, offset: 0, has_more: false}), {status: 200, headers: {'Content-Type': 'application/json'}}))")
-                browser_page.wait_for("state.acknowledgedRun && state.acknowledgedRun.run_id === 'new-run' && document.getElementById('finder-log').textContent.includes('first live line')", "stale status and history keep acknowledged run")
-                browser_page.evaluate("window.__int.terminal = true; window.__intEmit('runs')")
-                browser_page.wait_for("!state.acknowledgedRun && !document.querySelector('[data-action=\"run-selected-discovery\"]').disabled", "matching terminal history converges run")
-                final_state = browser_page.evaluate("({posts: window.__int.posts, log: document.getElementById('finder-log').textContent, status: document.getElementById('metric-job').textContent})")
-                browser_page.evaluate("window.__int.startError = true")
-                browser_page.click('[data-action="run-selected-discovery"]')
-                browser_page.wait_for("document.getElementById('message').textContent.includes('server-start-error')", "start error restores controls")
-                error_state = browser_page.evaluate("({posts: window.__int.posts, acknowledged: state.acknowledgedRun, startEnabled: !document.querySelector('[data-action=\"run-selected-discovery\"]').disabled, stopDisabled: document.querySelector('[data-action=\"stop-current\"]').disabled})")
-        self.assertTrue(in_flight["startDisabled"])
-        self.assertTrue(in_flight["stopDisabled"])
-        self.assertIn("Отправляем запрос на запуск: Поиск стратегий", in_flight["message"])
-        self.assertNotIn("Поиск стратегий запущено", in_flight["message"])
-        self.assertEqual(immediate, {"posts": 1, "startDisabled": True, "stopEnabled": True, "busy": "В очереди", "queuedLog": "Запуск подтверждён, ожидаем вывод", "logRunId": None, "acknowledgedLogRequest": True})
-        self.assertEqual(final_state, {"posts": 1, "log": "first live line", "status": "Свободно"})
-        self.assertEqual(error_state, {"posts": 2, "acknowledged": None, "startEnabled": True, "stopDisabled": True})
-
-    def test_wbg_browser_bootstrap_gate_is_atomic_generic_and_race_safe(self) -> None:
-        """WBG-001..006: run the generated boot UI in Chromium with controlled fetches."""
-        bootstrap = """
-localStorage.setItem('gp-control-plane-auth-token', 'test-token');
-window.__wbg = { attempt: 0, pending: {}, signals: {}, events: 0, eventsBeforeReady: null, retryClicks: 0 };
-document.addEventListener('click', (event) => {
-  if (event.target instanceof Element && event.target.closest('#boot-retry')) window.__wbg.retryClicks += 1;
-});
-window.fetch = (input, options) => {
-  const url = String(input instanceof Request ? input.url : input);
-  const key = url.includes('/api/web/status') ? 'status'
-    : url.includes('/api/web/runs/history-page') ? 'runs'
-    : url.includes('/api/core/runs/latest-log') ? 'log'
-    : url.includes('/api/web/presets') ? 'presets'
-    : url.includes('/api/core/run-settings') ? 'settings' : null;
-  if (url.includes('/api/web/events/stream')) {
-    window.__wbg.events += 1;
-    return Promise.resolve(new Response('', {status: 200, headers: {'Content-Type': 'text/event-stream'}}));
-  }
-  if (!key) return Promise.resolve(new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}}));
-  if (key === 'status') window.__wbg.attempt += 1;
-  const attempt = window.__wbg.attempt;
-  window.__wbg.signals[attempt] = options && options.signal;
-  return new Promise((resolve, reject) => {
-    (window.__wbg.pending[attempt] ||= {})[key] = {resolve, reject};
-  });
-};
-window.__wbgPayload = (attempt, key) => {
-  if (key === 'status') return {version: `attempt-${attempt}`, state: 'idle', zapret2: {ready: true}, settings: {}, run_preferences: {}};
-  if (key === 'runs') return {runs: [], total: 0, limit: 50, offset: 0, has_more: false};
-  if (key === 'log') return {events: []};
-  if (key === 'presets') return {custom: {}, system: {}, metadata: {}, system_metadata: {}};
-  return {settings: {}};
-};
-window.__wbgComplete = (attempt, failure) => {
-  for (const key of ['status', 'runs', 'log', 'presets', 'settings']) {
-    const pending = window.__wbg.pending[attempt][key];
-    if (key === failure) pending.reject(new Error(`transport-${key}-secret`));
-    else pending.resolve(new Response(JSON.stringify(window.__wbgPayload(attempt, key)), {status: 200, headers: {'Content-Type': 'application/json'}}));
-  }
-};
-window.__wbgFailOnly = (attempt, key) => window.__wbg.pending[attempt][key].reject(new Error('transport-rejected-secret'));
-window.__wbgWait = (predicate, timeout = 500) => new Promise((resolve, reject) => {
-  const deadline = Date.now() + timeout;
-  const check = () => predicate() ? resolve() : Date.now() >= deadline ? reject(new Error('wbg wait timeout')) : requestAnimationFrame(check);
-  check();
-});
-"""
-        probe = """
-<output id="wbg-browser-probe"></output>
-<script>
-window.addEventListener('load', async () => {
-  const probe = document.getElementById('wbg-browser-probe');
-  const loadingOnly = () => !document.getElementById('app-shell') && !document.querySelector('.tabs') && !document.getElementById('message') && document.getElementById('boot-screen').innerText.includes('Загрузка интерфейса');
-  try {
-    await __wbgWait(() => __wbg.attempt === 1);
-    __wbg.eventsBeforeReady = __wbg.events;
-    probe.dataset.loading = String(loadingOnly());
-    __wbgFailOnly(1, 'status');
-    await __wbgWait(() => document.getElementById('boot-retry').hidden === false);
-    probe.dataset.regularFailureAbort = String(__wbg.signals[1].aborted && !document.getElementById('app-shell') && Object.keys(__wbg.pending[1]).length === 5);
-    probe.dataset.awaitingRetry = 'regular';
-    await __wbgWait(() => __wbg.retryClicks === 1);
-    delete probe.dataset.awaitingRetry;
-    await __wbgWait(() => __wbg.attempt === 2);
-    __wbgComplete(2, null);
-    await __wbgWait(() => Boolean(document.getElementById('app-shell')) && bootstrapState === 'ready');
-    probe.dataset.regularFailureRetryReady = String(state.status.version === 'attempt-2' && document.getElementById('boot-screen').hidden);
-    for (const failure of ['status', 'runs', 'log', 'presets', 'settings']) {
-      startAuthenticatedUi();
-      await __wbgWait(() => __wbg.pending[__wbg.attempt] && __wbg.pending[__wbg.attempt].settings);
-      const attempt = __wbg.attempt;
-      __wbgComplete(attempt, failure);
-      await __wbgWait(() => document.getElementById('boot-retry').hidden === false);
-      const text = document.getElementById('boot-screen').innerText;
-      probe.dataset[`failure${failure}`] = String(!document.getElementById('app-shell') && !document.querySelector('.tabs') && !document.getElementById('message') && text.includes('Не удалось загрузить интерфейс') && !text.includes('transport-') && !text.includes('/api/'));
-    }
-    const duplicateBase = __wbg.attempt;
-    probe.dataset.awaitingRetry = 'duplicate';
-    await __wbgWait(() => __wbg.retryClicks === 2);
-    // The second delivery is an injected duplicate-event ordering fixture;
-    // the first retry click is performed by Playwright outside this fixture.
-    document.getElementById('boot-retry').click();
-    delete probe.dataset.awaitingRetry;
-    await __wbgWait(() => __wbg.attempt === duplicateBase + 1);
-    probe.dataset.duplicateRetry = String(__wbg.attempt === duplicateBase + 1);
-    const retryAttempt = __wbg.attempt;
-    __wbgComplete(retryAttempt, null);
-    await __wbgWait(() => Boolean(document.getElementById('app-shell')) && bootstrapState === 'ready');
-    probe.dataset.retryReady = String(state.status.version === `attempt-${retryAttempt}` && document.getElementById('boot-screen').hidden && Boolean(document.querySelector('.tabs')) && !document.getElementById('message').textContent.includes('transport-'));
-    const oldAttempt = __wbg.attempt;
-    startAuthenticatedUi();
-    await __wbgWait(() => __wbg.attempt === oldAttempt + 1);
-    const staleAttempt = __wbg.attempt;
-    startAuthenticatedUi();
-    await __wbgWait(() => __wbg.attempt === staleAttempt + 1);
-    const currentAttempt = __wbg.attempt;
-    __wbgComplete(currentAttempt, null);
-    await __wbgWait(() => Boolean(document.getElementById('app-shell')) && bootstrapState === 'ready');
-    const readyVersion = state.status.version;
-    __wbgComplete(staleAttempt, null);
-    await Promise.resolve();
-    probe.dataset.staleIgnored = String(state.status.version === readyVersion && state.status.version === `attempt-${currentAttempt}`);
-    probe.dataset.eventsAfterReady = String(__wbg.events > __wbg.eventsBeforeReady);
-  } catch (error) {
-    probe.dataset.error = String(error && error.message || error);
-  }
-});
-</script>
-"""
-        with tempfile.TemporaryDirectory() as raw:
-            page = Path(raw) / "wbg-bootstrap.html"
-            html = index_html().replace("<script>", f"<script>{bootstrap}", 1).replace("</body>", f"{probe}</body>")
-            page.write_text(html, encoding="utf-8")
-            with PlaywrightPage() as browser_page:
-                browser_page.navigate(page.as_uri())
-                browser_page.wait_for("document.getElementById('wbg-browser-probe')?.dataset.awaitingRetry === 'regular'", "visible regular WBG retry")
-                browser_page.click("#boot-retry")
-                browser_page.wait_for("document.getElementById('wbg-browser-probe')?.dataset.awaitingRetry === 'duplicate'", "visible duplicate WBG retry")
-                browser_page.click("#boot-retry")
-                browser_page.wait_for("document.getElementById('wbg-browser-probe')?.dataset.eventsAfterReady === 'true'", "WBG controlled bootstrap race")
-                probe_state = browser_page.evaluate("({ ...document.getElementById('wbg-browser-probe').dataset })")
-        self.assertEqual(probe_state, {"loading": "true", "regularFailureAbort": "true", "regularFailureRetryReady": "true", "failurestatus": "true", "failureruns": "true", "failurelog": "true", "failurepresets": "true", "failuresettings": "true", "duplicateRetry": "true", "retryReady": "true", "staleIgnored": "true", "eventsAfterReady": "true"})
-
-    def test_wbg_browser_timeout_fails_current_attempt_then_retry_reaches_ready(self) -> None:
-        """WBG-R04: one pending bootstrap request reaches generic failed then a user retry succeeds."""
-        bootstrap = """
-localStorage.setItem('gp-control-plane-auth-token', 'test-token');
-window.__wbgTimeout = {attempt: 0, pending: {}, signals: {}, events: 0, retryClicks: 0};
-document.addEventListener('click', (event) => {
-  if (event.target instanceof Element && event.target.closest('#boot-retry')) window.__wbgTimeout.retryClicks += 1;
-});
-window.fetch = (input, options) => {
-  const url = String(input instanceof Request ? input.url : input);
-  const key = url.includes('/api/web/status') ? 'status'
-    : url.includes('/api/web/runs/history-page') ? 'runs'
-    : url.includes('/api/core/runs/latest-log') ? 'log'
-    : url.includes('/api/web/presets') ? 'presets'
-    : url.includes('/api/core/run-settings') ? 'settings' : null;
-  if (url.includes('/api/web/events/stream')) {
-    window.__wbgTimeout.events += 1;
-    return Promise.resolve(new Response('', {status: 200, headers: {'Content-Type': 'text/event-stream'}}));
-  }
-  if (!key) return Promise.resolve(new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}}));
-  if (key === 'status') window.__wbgTimeout.attempt += 1;
-  const attempt = window.__wbgTimeout.attempt;
-  window.__wbgTimeout.signals[attempt] = options && options.signal;
-  return new Promise((resolve) => { (window.__wbgTimeout.pending[attempt] ||= {})[key] = resolve; });
-};
-window.__wbgTimeoutComplete = (attempt) => {
-  const payloads = {
-    status: {version: 'timeout-retry-' + attempt, state: 'idle', zapret2: {ready: true}, settings: {}, run_preferences: {}},
-    runs: {runs: [], total: 0, limit: 50, offset: 0, has_more: false},
-    log: {events: []},
-    presets: {custom: {}, system: {}, metadata: {}, system_metadata: {}},
-    settings: {settings: {}}
-  };
-  for (const key of Object.keys(payloads)) {
-    window.__wbgTimeout.pending[attempt][key](new Response(JSON.stringify(payloads[key]), {status: 200, headers: {'Content-Type': 'application/json'}}));
-  }
-};
-window.__wbgTimeoutWait = (predicate, timeout = 500) => new Promise((resolve, reject) => {
-  const deadline = Date.now() + timeout;
-  const check = () => predicate() ? resolve() : Date.now() >= deadline ? reject(new Error('timeout probe wait')) : requestAnimationFrame(check);
-  check();
-});
-"""
-        probe = """
-<output id="wbg-timeout-browser-probe"></output>
-<script>
-window.addEventListener('load', async () => {
-  const probe = document.getElementById('wbg-timeout-browser-probe');
-  try {
-    await __wbgTimeoutWait(() => __wbgTimeout.attempt === 1);
-    await __wbgTimeoutWait(() => document.getElementById('boot-retry').hidden === false);
-    const failed = document.getElementById('boot-screen').innerText;
-    probe.dataset.timeoutFailed = String(!document.getElementById('app-shell') && __wbgTimeout.signals[1].aborted && failed.includes('Не удалось загрузить интерфейс') && !failed.includes('timeout') && !failed.includes('/api/'));
-    probe.dataset.awaitingRetry = 'timeout';
-    await __wbgTimeoutWait(() => __wbgTimeout.retryClicks === 1);
-    delete probe.dataset.awaitingRetry;
-    await __wbgTimeoutWait(() => __wbgTimeout.attempt === 2);
-    __wbgTimeoutComplete(2);
-    await __wbgTimeoutWait(() => bootstrapState === 'ready' && Boolean(document.getElementById('app-shell')));
-    probe.dataset.retryReady = String(state.status.version === 'timeout-retry-2' && document.getElementById('boot-screen').hidden && Boolean(document.querySelector('.tabs')) && __wbgTimeout.events > 0);
-  } catch (error) {
-    probe.dataset.error = String(error && error.message || error);
-  }
-});
-</script>
-"""
-        with tempfile.TemporaryDirectory() as raw:
-            page = Path(raw) / "wbg-timeout.html"
-            html = index_html().replace("const BOOTSTRAP_TIMEOUT_MS = 15000;", "const BOOTSTRAP_TIMEOUT_MS = 50;").replace("<script>", f"<script>{bootstrap}", 1).replace("</body>", f"{probe}</body>")
-            page.write_text(html, encoding="utf-8")
-            with PlaywrightPage() as browser_page:
-                browser_page.navigate(page.as_uri())
-                browser_page.wait_for("document.getElementById('wbg-timeout-browser-probe')?.dataset.awaitingRetry === 'timeout'", "visible timeout WBG retry")
-                browser_page.click("#boot-retry")
-                browser_page.wait_for("document.getElementById('wbg-timeout-browser-probe')?.dataset.retryReady === 'true'", "WBG timeout recovery")
-                probe_state = browser_page.evaluate("({ ...document.getElementById('wbg-timeout-browser-probe').dataset })")
-        self.assertEqual(probe_state, {"timeoutFailed": "true", "retryReady": "true"})
-
-    def test_common_tested_preset_waits_for_loaded_tested_domains(self) -> None:
-        html = index_html()
-
-        preset_start = html.index("function presetGroups(target)")
-        preset_end = html.index("function presetDomains(target, value)", preset_start)
-        preset_html = html[preset_start:preset_end]
-        self.assertIn("const tested = testedDomains();", preset_html)
-        self.assertIn("if (tested.length)", preset_html)
-
-        select_start = html.index("function renderPresetSelect(target)")
-        select_end = html.index("function renderPresetSelects()", select_start)
-        select_html = html[select_start:select_end]
-        self.assertIn("else if (target === 'common') select.value = CUSTOM_SELECT_VALUE;", select_html)
-        self.assertNotIn("target === 'common' && [...select.options].some((option) => option.value === 'builtin:tested')", select_html)
-        self.assertIn("function updateTestedDomains(domains)", html)
-        self.assertIn("updateTestedDomains(data.tested_domains)", html)
-        self.assertIn("renderPresetSelect('common')", html)
-
-    def test_launch_summary_panel_is_next_to_start_actions(self) -> None:
-        html = index_html()
-
-        summary_start = html.index('class="run-launch-summary"')
-        actions_start = html.index('class="button-row run-actions"')
-        self.assertLess(summary_start, actions_start)
-        self.assertIn('aria-label="Сводка параметров запуска"', html)
-        self.assertIn("run-launch-readiness", html)
-        self.assertIn("run-launch-summary-grid", html)
-        self.assertIn("Параметры запуска", html)
-
-    def test_launch_summary_shows_result_affecting_parameters(self) -> None:
-        html = index_html()
-
-        for label in (
-            "Домены запуска",
-            "Обязательные",
-            "Желательные",
-            "Источник",
-            "Режим",
-            "Проверочные запросы",
-            "Протоколы",
-            "IP-режим",
-            "Глубина",
-            "DNS/IP-check",
-            "Повторы",
-            "Лимит времени",
-            "Таймауты",
-        ):
-            self.assertIn(label, html)
-        self.assertIn("selectedFinderPresetSummary", html)
-        self.assertIn("selectedRunModeLabel", html)
-        self.assertIn("protocolSummary(options)", html)
-        self.assertIn("curlParallelism()", html)
-        self.assertIn("timeoutSecondsOrNull()", html)
-
-    def test_launch_summary_has_explicit_readiness_states(self) -> None:
-        html = index_html()
-
-        self.assertIn("runLaunchReadiness", html)
-        self.assertIn("if (!hasCompleteSystemStatus()) return { text: 'Проверяем систему', tone: 'pending' };", html)
-        self.assertIn("Готово к старту", html)
-        self.assertIn("Требуется настройка", html)
-        self.assertIn("Нужны домены", html)
-        self.assertIn("Нужен протокол", html)
-        self.assertIn("Идет подбор", html)
-
-    def test_initial_missing_system_status_is_neutral_and_retries(self) -> None:
-        html = index_html()
-
-        self.assertIn("INITIAL_SYSTEM_STATUS_RETRY_DELAY_MS = 750", html)
-        self.assertIn("INITIAL_SYSTEM_STATUS_RETRY_LIMIT = 3", html)
-        self.assertIn("function scheduleInitialSystemStatusRetry()", html)
-        self.assertIn("function hasCompleteSystemStatus(status = state.status)", html)
-        self.assertIn("refresh({ silent: true });", html)
-        self.assertIn("if (!hasCompleteSystemStatus()) state.statusLoading = true;", html)
-        self.assertIn("scheduleInitialSystemStatusRetry();", html)
-        self.assertIn("status: getJson(apiEndpoint('web', 'status'))", html)
-        self.assertIn("status: '/api/web/status'", html)
-        self.assertIn("compact-status ${pending ? 'pending' : 'unknown'}", html)
-        self.assertIn("${pending ? 'Проверяем' : 'Нет статуса'}", html)
-        self.assertIn("button.disabled = controlsBlocked;", html)
-        self.assertIn("hasEnabledProtocol(options)", html)
-
-    def test_wbg_001_boot_loading_has_no_mounted_dashboard(self) -> None:
-        """WBG-001: the shell is not part of the active DOM while booting."""
-        html = index_html()
-
-        self.assertIn('<section class="boot-screen" id="boot-screen"', html)
-        self.assertIn('id="boot-message">Загрузка интерфейса…</div>', html)
-        self.assertIn('<template id="app-shell-template">', html)
-        self.assertLess(html.index('<template id="app-shell-template">'), html.index('<div class="shell" id="app-shell">'))
-        self.assertIn("this._ui.boot('loading');", html)
-
-    def test_wbg_002_boot_success_mounts_once_after_all_five_requests(self) -> None:
-        """WBG-002: only a complete five-response set mounts and renders the shell."""
-        html = index_html()
-
-        start = html.index('async function loadBootstrapPayload(signal)')
-        end = html.index('function applyBootstrapPayload', start)
-        bootstrap = html[start:end]
-        self.assertIn('const requests = Promise.all([', bootstrap)
-        self.assertIn('await Promise.race([requests, timeout]);', bootstrap)
-        self.assertIn('const BOOTSTRAP_TIMEOUT_MS = 15000;', html)
-        self.assertIn('this._bootstrapController?.abort();', html)
-        for request in ('status', 'runHistoryPage', 'latestLog', 'presets', 'fetchSettingsPayload'):
-            self.assertIn(request, bootstrap)
-        self.assertIn('showApplication();', html)
-        self.assertIn('renderAll({ skipCandidates: true });', html)
-        self.assertIn('this._realtime?.start();', html)
-
-    def test_wbg_003_boot_failure_exposes_only_generic_retry_screen(self) -> None:
-        """WBG-003: bootstrap errors never interpolate transport details into the page."""
-        html = index_html()
-
-        self.assertIn('Не удалось загрузить интерфейс. Попробуйте ещё раз.', html)
-        self.assertIn('<button id="boot-retry" type="button" hidden>Повторить</button>', html)
-        start = html.index('class SessionController')
-        end = html.index('/* View-owned finite callbacks.', start)
-        session = html[start:end]
-        self.assertIn('} catch (error) {', session)
-        self.assertIn("this._ui.boot('failed');", session)
-        self.assertNotIn('error.message', session)
-
-    def test_wbg_004_retry_returns_from_failure_to_ready_without_message_area(self) -> None:
-        """WBG-004: retry invokes a fresh bootstrap and does not use dashboard messaging."""
-        html = index_html()
-
-        retry_start = html.index("el('boot-retry').addEventListener")
-        retry = html[retry_start:html.index('if (authToken())', retry_start)]
-        self.assertIn("if (bootstrapState === 'failed') startAuthenticatedUi();", retry)
-        self.assertNotIn('setMessage(', retry)
-
-    def test_wbg_005_repeated_failure_keeps_the_isolated_error_screen(self) -> None:
-        """WBG-005: every failed bootstrap removes any previously mounted shell."""
-        html = index_html()
-
-        start = html.index('function showBoot(state)')
-        end = html.index('function stopRealtimeEvents()', start)
-        boot = html[start:end]
-        self.assertIn("el('app-shell')?.remove();", boot)
-        self.assertIn("retry.hidden = state !== 'failed';", boot)
-
-    def test_wbg_006_retry_aborts_and_ignores_stale_bootstrap_results(self) -> None:
-        """WBG-006: the extracted session owner uses cancellation and an epoch guard."""
-        html = index_html()
-
-        start = html.index('class SessionController')
-        end = html.index('class ApiClient') if html.index('class ApiClient') > start else html.index('const CUSTOM_PRESETS_KEY', start)
-        session = html[start:end]
-        self.assertIn('this._epoch = 0;', session)
-        self.assertIn('this._bootstrapController?.abort();', session)
-        self.assertIn('const epoch = this._invalidate();', session)
-        self.assertIn('if (!this.active(epoch)) return false;', session)
-        self.assertIn('controller.abort();', session)
-
-    def test_wbg_post_ready_refresh_contract_is_not_part_of_bootstrap_gate(self) -> None:
-        """WBG-R01: retain the existing post-ready refresh map and silent fallback."""
-        html = index_html()
-
-        map_start = html.index('function refreshRequestMap(light)')
-        map_end = html.index('function settledValue(', map_start)
-        refresh_map = html[map_start:map_end]
-        self.assertIn('const bootstrap = !light || !hasCompleteSystemStatus();', refresh_map)
-        self.assertIn("status: getJson(apiEndpoint('web', 'status'))", refresh_map)
-        self.assertIn("finderRuns: getJson(apiUrl('web', 'runHistoryPage', runParams(0)))", refresh_map)
-        self.assertIn("finderLog: getJson(latestLogUrl(false))", refresh_map)
-        self.assertIn('if (bootstrap) {', refresh_map)
-        self.assertIn("requests.presets = getJson(apiEndpoint('web', 'presets'));", refresh_map)
-        self.assertIn('requests.settings = fetchSettingsPayload();', refresh_map)
-        self.assertNotIn('bootstrapEpoch', refresh_map)
-        realtime_start = html.index('class RealtimeController')
-        realtime_end = html.index('class SessionController', realtime_start)
-        realtime = html[realtime_start:realtime_end]
-        self.assertIn('if (!this._connected && !this._disposed && this._isActive()) this._fallback();', realtime)
-        self.assertIn('if (this._fallbackTimer) this._clearInterval(this._fallbackTimer);', realtime)
-
-    def test_curl_parallelism_field_is_scoped_to_multi_domain_mode(self) -> None:
-        html = index_html()
-
-        self.assertIn("[hidden] { display: none !important; }", html)
-        self.assertIn('<div class="field multi-curl-field" id="multi-curl-field" hidden>', html)
-        field_start = html.index('id="multi-curl-field" hidden')
-        field_end = html.index("</div>", html.index("Работает только в режиме", field_start))
-        field_html = html[field_start:field_end]
-
-        self.assertIn('id="curl-parallelism"', field_html)
-        self.assertIn("Все домены на одной стратегии", field_html)
-        self.assertIn("curlField.hidden = mode !== 'multi';", html)
-
-    def test_discovery_profile_is_advanced_blockcheck_scan_level_control(self) -> None:
-        html = index_html()
-
-        self.assertNotIn("Профиль подбора", html)
-        self.assertIn("Глубина проверки стратегий", html)
-        self.assertNotIn("Уровень поиска blockcheck2", html)
-        options_start = html.index('<div class="preset-panel finder-options-panel">')
-        options_end = html.index('<details class="preset-panel">', options_start)
-        options_html = html[options_start:options_end]
-        advanced_start = options_end
-        advanced_end = html.index("</details>", advanced_start)
-        advanced_html = html[advanced_start:advanced_end]
-
-        self.assertIn('id="enable-http"', options_html)
-        self.assertIn('id="enable-tls12"', options_html)
-        self.assertIn('id="include-quic"', options_html)
-        self.assertNotIn('id="discovery-profile-select"', options_html)
-        self.assertNotIn('id="scan-level"', options_html)
-        self.assertNotIn('id="repeats"', options_html)
-        self.assertIn('id="discovery-profile-select"', advanced_html)
-        self.assertIn('id="scan-level"', advanced_html)
-        self.assertIn('id="repeats"', advanced_html)
-        self.assertIn('id="limit-time-enabled"', advanced_html)
-        self.assertIn('id="run-curl-max-time"', advanced_html)
-        self.assertIn('id="run-curl-max-time-quic"', advanced_html)
-        self.assertIn('id="run-curl-max-time-doh"', advanced_html)
-        render_start = html.index("function renderDiscoveryProfiles()")
-        render_end = html.index("function hasEnabledProtocol", render_start)
-        render_html = html[render_start:render_end]
-        self.assertNotIn('<option value="${CUSTOM_SELECT_VALUE}">Custom</option>', render_html)
-        self.assertNotIn("event.target.value === CUSTOM_SELECT_VALUE", html[html.index("if (event.target && event.target.id === 'discovery-profile-select')"):html.index("if (event.target && event.target.name === 'run-mode')")])
-
-    def test_expandable_preset_panel_has_clear_affordance(self) -> None:
-        html = index_html()
-
-        self.assertIn("details.preset-panel > summary::before", html)
-        self.assertIn("details.preset-panel[open] > summary::before", html)
-        self.assertNotIn('content: "Раскрыть";', html)
-        self.assertNotIn('content: "Свернуть";', html)
-        self.assertNotIn('<span class="helper-text">глубина, повторы, DNS/IP-check, лимиты и timeout</span>', html)
-        self.assertIn("details.preset-panel > summary:focus-visible", html)
-
-    def test_single_action_rows_use_an_explicit_primary_pattern(self) -> None:
-        html = index_html()
-
-        self.assertIn(".primary-only-action > button", html)
-        self.assertIn('class="button-row l-action-grid primary-only-action"', html)
-        self.assertIn("width: 100%", html)
-        self.assertNotIn(".button-row.l-action-grid > :only-child", html)
-        self.assertNotIn("action-row-single", html)
-
-    def test_domain_group_disclosure_has_a_stateful_css_marker(self) -> None:
-        html = index_html()
-
-        self.assertIn(".domain-group > .domain-header::after", html)
-        self.assertIn('content: "";', html)
-        self.assertIn(".domain-group[open] > .domain-header::after", html)
-        self.assertIn("transform: rotate(225deg);", html)
-
-    def test_domain_meta_precedes_the_disclosure_indicator_in_each_domain_header(self) -> None:
-        """WEBL-016: metadata remains part of the header, before its chevron."""
-        html = index_html()
-
-        for function_name, next_function in (
-            ("function renderDomainCandidates()", "function renderCommonCandidates("),
-            ("function renderCommonCandidates(", "function candidateDomainPager("),
-        ):
-            rendered = html[html.index(function_name):html.index(next_function, html.index(function_name))]
-            header_start = rendered.index('<summary class="domain-header">')
-            header_end = rendered.index("</summary>", header_start)
-            header = rendered[header_start:header_end]
-            self.assertLess(header.index('class="domain-title"'), header.index('class="domain-meta"'))
-
-    def test_settings_hides_vault_but_keeps_backup_action_semantics_and_debug_note_grouping(self) -> None:
-        """WEBL-017/018/019/T10: no UI vault, safe restore, destructive delete, grouped help."""
-        html = index_html()
-
-        backup_card = html[html.index("function backupCard(item)"):html.index("function normalizeBackupSnapshot", html.index("function backupCard(item)"))]
-        self.assertRegex(
-            backup_card,
-            r'<button class="secondary(?![^\"]*danger)[^\"]*" data-backup-restore=',
-        )
-        self.assertIn('class="secondary danger" data-backup-delete=', backup_card)
-        self.assertIn("item.checksum_ok ? '' : statusBadge('checksum fail', 'bad')", backup_card)
-        self.assertNotIn("checksum ok", backup_card)
-        for selector, handler in (
-            ("data-backup-restore", "button.dataset.backupRestore"),
-            ("data-backup-delete", "button.dataset.backupDelete"),
-        ):
-            self.assertIn(selector, backup_card)
-            self.assertIn(handler, html)
-
-        debug_note = (
-            "Включает расширенную запись stdout проверки стратегий в debug-файл. Обычный терминал остается "
-            "компактным; debug нужен только для диагностики и может увеличить запись на диск."
-        )
-        self.assertRegex(
-            html,
-            rf'<div[^>]*>\s*<label[^>]*>\s*<input id="settings-debug-stdout" type="checkbox">[\s\S]*?</label>\s*'
-            rf'<div class="setting-note">{re.escape(debug_note)}</div>\s*</div>',
-        )
-
-    def test_protocol_controls_use_the_responsive_form_grid_primitive(self) -> None:
-        html = index_html()
-
-        self.assertIn('<div class="protocol-grid l-form-grid">', html)
-        self.assertIn('id="enable-http"', html)
-        self.assertIn('id="enable-tls12"', html)
-        self.assertIn(".protocol-grid.l-form-grid > * { grid-column: span 4; }", html)
-        self.assertIn(".protocol-grid.l-form-grid > * { grid-column: span 6; }", html)
-
-    def test_time_limit_panel_keeps_layout_stable_when_disabled(self) -> None:
-        html = index_html()
-
-        advanced_start = html.index('<details class="preset-panel">')
-        advanced_end = html.index("</details>", advanced_start)
-        advanced_html = html[advanced_start:advanced_end]
-        time_panel_start = advanced_html.index('id="time-limit-panel"')
-        preset_grid_start = advanced_html.index('<div class="preset-grid">')
-        preset_grid_html = advanced_html[preset_grid_start:advanced_html.index('id="repeat-parallel"', preset_grid_start)]
-
-        self.assertLess(time_panel_start, preset_grid_start)
-        self.assertIn('<div class="time-limit-panel disabled" id="time-limit-panel">', advanced_html)
-        self.assertIn('<div class="field time-limit-field" id="time-limit-field" aria-disabled="true">', advanced_html)
-        self.assertIn('id="finder-timeout-hours" type="number" min="0.1" max="24" step="0.5" value="6" disabled', advanced_html)
-        self.assertNotIn('id="limit-time-enabled"', preset_grid_html)
-        self.assertNotIn(".time-limit-field[hidden]", html)
-        self.assertNotIn("el('time-limit-field').hidden", html)
-        self.assertIn("input.disabled = !enabled;", html)
-        self.assertIn("panel.classList.toggle('disabled', !enabled);", html)
-
-    def test_live_run_panel_has_current_operational_slice(self) -> None:
-        html = index_html()
-
-        self.assertIn('id="live-run-panel"', html)
-        self.assertIn("function renderLiveRun()", html)
-        self.assertIn("function liveRunCells(progress)", html)
-        for label in ("Текущий подбор", "Статус", "Этап", "Попытки", "Стратегии", "Найдено", "Текущий файл", "Прошло", "Осталось"):
-            self.assertIn(label, html)
-
-    def test_live_run_panel_keeps_stop_log_and_results_actions(self) -> None:
-        html = index_html()
-
-        self.assertIn('data-action="stop-current"', html)
-        self.assertIn('data-action="open-log"', html)
-        self.assertIn('data-action="open-candidates"', html)
-        self.assertIn("renderLiveRun();", html)
-        self.assertIn("latestImportantLogMessage", html)
-
-    def test_live_run_panel_warns_about_interrupted_run_after_restart(self) -> None:
-        html = index_html()
-
-        self.assertIn("interruptedRunWarning", html)
-        self.assertIn("Предыдущий подбор был прерван перезагрузкой", html)
-        self.assertIn("Активный подбор не восстанавливается после перезагрузки", html)
-        self.assertIn("!['running', 'queued', 'stopping'].includes(status)", html)
-
-    def test_terminal_tab_keeps_raw_log_as_secondary_debug_block(self) -> None:
-        html = index_html()
-
-        self.assertIn('class="raw-log-panel"', html)
-        self.assertIn("Raw log / debug", html)
-        self.assertLess(html.index('id="live-run-panel"'), html.index('class="raw-log-panel"'))
-        self.assertLess(html.index('id="events-panel"'), html.index('class="raw-log-panel"'))
-
-    def test_events_panel_uses_existing_status_log_and_diagnostics(self) -> None:
-        html = index_html()
-
-        self.assertIn('id="events-panel"', html)
-        self.assertIn("function eventRows()", html)
-        self.assertIn("stateBoard.last_error", html)
-        self.assertIn("log.stderr_diagnostics", html)
-        self.assertNotIn("state.releaseUpdate", html)
-        self.assertNotIn("releaseStatus === 'failed'", html)
-        self.assertNotIn("release.status === 'failed' || release.error", html)
-        self.assertNotIn("eventStore", html)
-
-    def test_events_panel_has_repeat_log_and_copy_actions(self) -> None:
-        html = index_html()
-
-        self.assertIn('data-action="repeat-last-run"', html)
-        self.assertIn('data-action="open-log"', html)
-        self.assertIn('data-action="copy-diagnostics"', html)
-        self.assertIn("function copyDiagnostics()", html)
-        self.assertIn("diagnosticsText()", html)
-
-    def test_candidate_result_panel_has_agreed_modes_and_fields(self) -> None:
-        html = index_html()
-
-        self.assertIn("candidate-result-panel", html)
-        common_start = html.index('id="common-controls"')
-        result_start = html.index('class="candidate-result-panel"', common_start)
-        preset_start = html.index('id="common-preset-select"', common_start)
-        self.assertGreater(result_start, common_start)
-        self.assertGreater(result_start, preset_start)
-        self.assertIn("Пресет доменов для пересечения", html)
-        self.assertIn("Итоговый набор общих стратегий", html)
-        self.assertIn('data-action="build-candidate-result"', html)
-        for label in ("Максимум покрытия", "Минимум стратегий", "Баланс"):
-            self.assertIn(label, html)
-        for field in ("required_coverage", "desired_coverage", "uncovered_required", "uncovered_desired", "strategy_set", "reason", "mode"):
-            self.assertIn(field, html)
-
-    def test_candidate_result_is_computed_from_loaded_candidates_only(self) -> None:
-        html = index_html()
-
-        self.assertIn("function commonCandidateResultRows()", html)
-        self.assertIn("state.candidates", html)
-        self.assertIn("selection.buildCandidateResult(mode,candidateResultTargets(),commonCandidateResultRows())", html)
-        self.assertNotIn("function loadedCandidateRows()", html)
-        self.assertIn("Расчет по загруженным общим стратегиям", html)
-        self.assertNotIn("/api/candidate-result", html)
-
-    def test_candidate_result_is_one_button_common_action(self) -> None:
-        html = index_html()
-
-        self.assertIn("candidateResultRequested: false", html)
-        self.assertIn("function buildCandidateResultNow()", html)
-        self.assertIn("state.candidateResultRequested = true;", html)
-        self.assertIn("if (!state.candidateResultRequested)", html)
-        self.assertIn("panel.hidden = state.candidateView !== 'common';", html)
-        self.assertIn("Нажмите «Собрать итоговый набор»", html)
-        self.assertIn("state.candidateResultRequested = false;", html)
-
-    def test_candidate_result_does_not_fallback_required_to_launch_domains(self) -> None:
-        html = index_html()
-
-        start = html.index("function candidateResultTargets()")
-        end = html.index("function commonCandidateResultRows()", start)
-        target_html = html[start:end]
-        self.assertIn("const required = uniqueDomains(presetDomains('finder', 'system:required'));", target_html)
-        self.assertIn("const desired = uniqueDomains(presetDomains('finder', 'system:desired'))", target_html)
-        self.assertNotIn("selectedFinderDomains()", target_html)
-        self.assertNotIn("required.length ? required", target_html)
-        self.assertIn("Нет обязательных или желательных доменов для расчета итогового набора.", html)
-
-    def test_candidate_result_actions_are_practical_without_new_validation(self) -> None:
-        html = index_html()
-
-        self.assertIn('data-action="copy-candidate-result"', html)
-        self.assertIn('data-action="export-candidate-result"', html)
-        self.assertIn('data-action="use-candidate-result-domains"', html)
-        self.assertIn('data-action="open-candidate-result"', html)
-        self.assertNotIn("data-candidate-verify", html)
-        self.assertNotIn("/api/jobs/zapret-custom-verification", html)
-
-    def test_candidate_balance_covers_required_before_desired(self) -> None:
-        html = index_html()
-
-        self.assertIn("requiredGain * 100000 + desiredGain * 1000", html)
-        self.assertIn("uncoveredRequired", html)
-        self.assertIn("uncoveredDesired", html)
-        self.assertIn("Нет загруженных стратегий, которые покрывают выбранные домены.", html)
-
-    def test_history_repeat_fills_launch_form_without_autostart(self) -> None:
-        html = index_html()
-
-        start = html.index("function repeatRun(runKey)")
-        end = html.index("function runProgressText(row)", start)
-        repeat_html = html[start:end]
-        self.assertIn("fillRunFormFromPayload(row, payload);", repeat_html)
-        self.assertNotIn("startJob(", repeat_html)
-        self.assertIn("Параметры прошлого подбора перенесены в форму запуска", html)
-
-    def test_history_repeat_restores_result_affecting_parameters(self) -> None:
-        html = index_html()
-
-        start = html.index("function fillRunFormFromPayload")
-        end = html.index("function repeatRun(runKey)", start)
-        repeat_html = html[start:end]
-        for token in ("finder-domains", "run-mode", "curl-parallelism", "enable-http", "enable-tls12", "include-quic", "scan-level", "repeats", "skip-dnscheck", "run-curl-max-time", "limit-time-enabled"):
-            self.assertIn(token, repeat_html)
-
-    def test_mutating_actions_are_blocked_during_active_run(self) -> None:
-        html = index_html()
-
-        self.assertIn("const MUTATING_ACTIONS = new Set", html)
-        for action in ("save-settings", "create-backup", "upload-backup", "preset-editor-save", "preset-editor-delete", "preset-new-save", "v2fly-update-local-storage"):
-            self.assertIn(action, html)
-        self.assertIn("requireNoActiveRun()", html)
-        self.assertIn("protectedMutation", html)
-
-    def test_mutating_buttons_are_disabled_but_monitoring_actions_remain(self) -> None:
-        html = index_html()
-
-        self.assertIn("mutatingSelectors", html)
-        self.assertIn("const controlsBlocked = busy || !hasSystemStatus;", html)
-        self.assertIn("button.disabled = controlsBlocked;", html)
-        self.assertIn("button.disabled = !busy;", html)
-        self.assertNotIn("'open-log'", html[html.index("const MUTATING_ACTIONS = new Set"):html.index("]);", html.index("const MUTATING_ACTIONS = new Set"))])
-
-    def test_settings_auto_release_check_waits_for_active_run(self) -> None:
-        html = index_html()
-
-        self.assertIn("if (!mutatingBlocked() && !state.releaseChecked && !state.releaseChecking) checkReleases({ silent: true });", html)
-
-    def test_settings_are_split_into_operational_groups(self) -> None:
-        html = index_html()
-
-        for marker in ("settings-discovery-panel", "settings-release-panel", "settings-backups-panel", "settings-danger-panel"):
-            self.assertIn(marker, html)
-        for title in ("Параметры подбора", "Релизы и обновления", "Бекапы и восстановление", "Опасные действия"):
-            self.assertIn(title, html)
-
-    def test_tabs_have_basic_accessibility_contract(self) -> None:
-        html = index_html()
-
-        self.assertIn('role="tablist"', html)
-        self.assertIn('role="tab"', html)
-        self.assertIn('aria-selected="true"', html)
-        self.assertIn('aria-controls="tab-panel-finder"', html)
-        self.assertIn('role="tabpanel"', html)
-        self.assertIn('tabindex="-1"', html)
-        self.assertIn("syncActiveTabUi", html)
-        self.assertIn("TAB_NAVIGATION_KEYS", html)
-        self.assertIn("function handleTabControlKeydown", html)
-        self.assertIn("function activateTabControl", html)
-        self.assertIn("ArrowRight", html)
-        self.assertIn("ArrowLeft", html)
-        self.assertIn("Home", html)
-        self.assertIn("End", html)
-        self.assertIn("button.tabIndex = active ? 0 : -1;", html)
-        self.assertIn("if (handleTabControlKeydown(event)) return;", html)
-
-    def test_responsive_layout_keeps_tab_aria_actions_and_layout_primitives(self) -> None:
-        """WEBL-002/005/006/007/008/010 and WEBL-T06: layout must not rewrite UI contracts."""
-        html = index_html()
-        primary_tabs = (
-            ("finder", "Подбор"),
-            ("history", "История"),
-            ("candidates", "Кандидаты"),
-            ("terminal", "Терминал"),
-            ("lists", "Списки и профили"),
-            ("settings", "Настройки"),
-        )
-        for name, label in primary_tabs:
-            tab_id = f"tab-{name}"
-            panel_id = f"tab-panel-{name}"
-            self.assertRegex(
-                html,
-                rf'<button[^>]*id="{tab_id}"[^>]*role="tab"[^>]*aria-controls="{panel_id}"[^>]*data-tab="{name}"[^>]*>{label}</button>',
-            )
-            self.assertRegex(
-                html,
-                rf'<section[^>]*id="{panel_id}"[^>]*role="tabpanel"[^>]*aria-labelledby="{tab_id}"[^>]*data-tab-page="{name}"',
-            )
-
-        for view in ("domain", "common"):
-            self.assertRegex(
-                html,
-                rf'<button[^>]*id="candidate-view-{view}"[^>]*role="tab"[^>]*aria-controls="candidates-table"[^>]*data-candidate-view="{view}"',
-            )
-        for mode in ("coverage", "minimal", "balance"):
-            self.assertRegex(
-                html,
-                rf'<button[^>]*id="candidate-result-mode-{mode}"[^>]*role="tab"[^>]*aria-controls="candidate-result-body"[^>]*data-candidate-result-mode="{mode}"',
-            )
-        self.assertIn('id="candidate-result-body" class="candidate-result-body" role="tabpanel"', html)
-
-        # All existing static actions are a layout-only compatibility boundary.
-        for action in (
-            "add-common-domain", "build-candidate-result", "change-password", "check-releases",
-            "copy-candidate-result", "copy-diagnostics", "create-backup",
-            "export-candidate-result", "logout", "open-candidate-result", "open-candidates", "open-log",
-            "preset-editor-delete", "preset-editor-export", "preset-editor-save", "preset-new-save",
-            "refresh-backups", "repeat-last-run", "run-selected-discovery",
-            "save-settings", "stop-current", "upload-backup", "use-candidate-result-domains", "v2fly-import",
-            "v2fly-load-categories", "v2fly-update-local-storage", "v2fly-preview", "v2fly-select-category",
-        ):
-            self.assertIn(f'data-action="{action}"', html)
-        self.assertIn('data-action="${esc(action)}"', html)
-
-        for primitive in ("l-container", "l-page-stack", "l-grid", "l-stack", "l-form-grid", "l-action-grid", "l-cluster"):
-            self.assertRegex(html, rf'\.{primitive}(?:[\s,.:{{])')
-        self.assertIn("@media", html)
-        self.assertIn("600px", html)
-        self.assertIn("960px", html)
-        for columns in (4, 8, 12):
-            self.assertRegex(html, rf'--[a-zA-Z0-9-]+:\s*{columns}\s*;')
-        for spacing in (16, 24):
-            self.assertRegex(html, rf'(?:--[a-zA-Z0-9-]+:\s*{spacing}px\s*;|\bpadding:\s*{spacing}px)')
-
-    def test_progress_and_focus_have_accessibility_contract(self) -> None:
-        html = index_html()
-
-        self.assertIn('role="progressbar"', html)
-        self.assertIn('aria-valuemin="0"', html)
-        self.assertIn('aria-valuemax="100"', html)
-        self.assertIn("aria-valuenow", html)
-        self.assertIn("button:focus-visible", html)
-        self.assertIn("summary:focus-visible", html)
-
-    def test_index_script_has_no_raw_newlines_inside_quoted_strings(self) -> None:
-        html = index_html()
-        marker_start = "<script>"
-        marker_end = "</script>"
-        start = html.index(marker_start) + len(marker_start)
-        end = html.index(marker_end, start)
-        script = html[start:end]
-
-        errors: list[int] = []
-        line = 1
-        in_string: str | None = None
-        in_template = False
-        in_regex = False
-        in_regex_class = False
-        in_line_comment = False
-        in_block_comment = False
-        escaped = False
-        last_significant: str | None = None
-        index = 0
-        while index < len(script):
-            char = script[index]
-            next_char = script[index + 1] if index + 1 < len(script) else ""
-            if char == "\n":
-                line += 1
-                in_line_comment = False
-            if in_line_comment:
-                index += 1
-                continue
-            if in_block_comment:
-                if char == "*" and next_char == "/":
-                    in_block_comment = False
-                    index += 2
-                    continue
-                index += 1
-                continue
-            if in_regex:
-                if char in "\r\n":
-                    errors.append(line)
-                    in_regex = False
-                    in_regex_class = False
-                elif escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == "[":
-                    in_regex_class = True
-                elif char == "]":
-                    in_regex_class = False
-                elif char == "/" and not in_regex_class:
-                    in_regex = False
-                    last_significant = "/"
-                index += 1
-                continue
-            if in_string:
-                if char in "\r\n":
-                    errors.append(line)
-                    in_string = None
-                elif escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == in_string:
-                    in_string = None
-                index += 1
-                continue
-            if in_template:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == "`":
-                    in_template = False
-                index += 1
-                continue
-            if char == "/" and next_char == "/":
-                in_line_comment = True
-                index += 2
-                continue
-            if char == "/" and next_char == "*":
-                in_block_comment = True
-                index += 2
-                continue
-            if char == "/" and (last_significant is None or last_significant in "([{=,:;!&|?"):
-                in_regex = True
-                escaped = False
-                in_regex_class = False
-                index += 1
-                continue
-            if char in ("'", '"'):
-                in_string = char
-            elif char == "`":
-                in_template = True
-            if not char.isspace():
-                last_significant = char
-            index += 1
-
-        self.assertEqual([], errors[:10], f"Raw newline inside JS string literal near lines: {errors[:10]}")
-
-    def test_index_html_does_not_contain_mojibake_markers(self) -> None:
-        html = index_html()
-
-        for marker in ("\u0420\u045b", "\u0420\u0451", "\u0421\u0403"):
-            self.assertNotIn(marker, html)
-
-        self.assertIn("Ошибка обновления истории", html)
-        self.assertIn("Ошибка обновления лога", html)
-        self.assertIn("Ошибка обновления пресетов", html)
-
-    def test_head_root_returns_ok_for_curl_i(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(
-                output=OutputConfig(
-                    state_dir=tmp / "state",
-                ),
-            )
-            port = start_server(serve, config).port
-
-            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            connection.request("HEAD", "/")
-            response = connection.getresponse()
-            response.read()
-            connection.close()
-
-            self.assertEqual(response.status, 200)
-            self.assertEqual(response.getheader("Content-Type"), "text/html; charset=utf-8")
-            self.assertEqual(response.getheader("Cache-Control"), "no-store")
 
     def test_serve_clears_stale_current_job_on_start(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -2218,6 +507,7 @@ window.addEventListener('load', async () => {
             with server:
                 self.assertIsNone(read_state(config.output.state_dir)["current_run_id"])
 
+
     def test_serve_does_not_clear_current_job_when_runtime_lock_exists(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
@@ -2231,6 +521,7 @@ window.addEventListener('load', async () => {
             server = _start_captured_server(serve, config)
             with server:
                 self.assertEqual(read_state(config.output.state_dir)["current_run_id"], "active-job")
+
 
     def test_legacy_diagnostics_endpoint_is_removed_from_alpha_api(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -2250,6 +541,7 @@ window.addEventListener('load', async () => {
 
             self.assertEqual(response.status, 404)
             self.assertIn("not found", body)
+
 
     def test_core_mode_serves_api_without_web_ui(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -2278,6 +570,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(web_status, 404)
             self.assertIn("not found", web_body.decode("utf-8"))
 
+
     def test_history_routes_use_run_id_without_legacy_id(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
@@ -2293,783 +586,19 @@ window.addEventListener('load', async () => {
             )
             authorization = _bearer_authorization_for_state(config.output.state_dir)
             core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
 
             contract = json.loads(web_app.openapi_json_bytes().decode("utf-8"))
             item_schema = contract["components"]["schemas"]["RunHistoryItem"]
             self.assertIn("run_id", item_schema["properties"])
             self.assertNotIn("id", item_schema["properties"])
 
-            for path in ("/api/core/runs/history", "/api/web/runs/history-page"):
-                status, _headers, body = _http_request(web_port, path, headers={"Authorization": authorization})
+            for path in ("/api/core/runs/history", "/api/internal/web-views/runs-history-page"):
+                status, _headers, body = _http_request(core_port, path, headers={"Authorization": authorization})
                 self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
                 item = json.loads(body.decode("utf-8"))["runs"][0]
                 self.assertEqual(item["run_id"], "run-contract")
                 self.assertNotIn("id", item)
 
-    def test_openapi_and_swagger_are_served_by_monolith_and_core_mode(self) -> None:
-        for target in (serve, serve_core):
-            with _captured_server_temporary_directory() as (raw, start_server):
-                tmp = Path(raw)
-                config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-                port = start_server(target, config).port
-
-                status, headers, body = _http_request(port, "/openapi.json")
-                head_status, head_headers, head_body = _http_request(port, "/openapi.json", method="HEAD")
-                self.assertEqual(status, 200)
-                self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertEqual(head_status, 200)
-                self.assertEqual(head_headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertEqual(int(head_headers.get("content-length") or "0"), len(body))
-                self.assertEqual(head_body, b"")
-                openapi_text = body.decode("utf-8")
-                openapi_contract = json.loads(
-                    openapi_text,
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                self.assertEqual(openapi_contract["openapi"], "3.1.0")
-                openapi_operations = {
-                    (path, method.upper())
-                    for path, operations in openapi_contract["paths"].items()
-                    for method in operations
-                }
-                self.assertEqual(openapi_operations, web_routes.openapi_operations(core_only=target is serve_core))
-                if target is serve_core:
-                    self.assertEqual(openapi_contract["info"]["title"], "GP Control Plane Core API")
-                    self.assertIn("Callable Core/Service/OpenAPI operations", openapi_contract["info"]["description"])
-                    self.assertFalse(any(path.startswith("/api/web/") for path in openapi_contract["paths"]))
-                else:
-                    self.assertEqual(openapi_contract["info"]["title"], "GP Control Plane API")
-                    self.assertIn("/api/web", openapi_text)
-                    self.assertTrue(any(path.startswith("/api/web/") for path in openapi_contract["paths"]))
-                self.assertIn("/api/core/backups/download-archive", openapi_contract["paths"])
-                self.assertNotIn("/api/core/backups/download-file", openapi_contract["paths"])
-                self.assertEqual(
-                    "downloadBackupArchive",
-                    openapi_contract["paths"]["/api/core/backups/download-archive"]["get"]["operationId"],
-                )
-                self.assertNotIn("jsonSchemaDialect", openapi_contract)
-                self.assertEqual(
-                    {"type": "http", "scheme": "bearer", "bearerFormat": "opaque"},
-                    openapi_contract["components"]["securitySchemes"]["bearerAuth"],
-                )
-                self.assertEqual([{"bearerAuth": []}], openapi_contract["security"])
-                self.assertEqual([], openapi_contract["paths"]["/api/health"]["get"]["security"])
-                self.assertEqual([], openapi_contract["paths"]["/api/auth/login"]["post"]["security"])
-                self.assertEqual([{"url": "/"}], [{"url": server["url"]} for server in openapi_contract["servers"]])
-                self.assertNotIn("localhost", openapi_text)
-                self.assertNotIn("127.0.0.1:8081", openapi_text)
-                examples = openapi_contract["components"]["examples"]
-                self.assertIn("StartRunRequestMultiDomain", examples)
-                self.assertEqual(30, examples["StartRunRequestMultiDomain"]["value"]["curl_parallelism"])
-                self.assertNotIn("mode_settings", examples["StartRunRequestMultiDomain"]["value"])
-                start_schema = openapi_contract["components"]["schemas"]["StartRunRequest"]
-                self.assertEqual(["domains"], start_schema["required"])
-                self.assertNotIn("mode_settings", start_schema["properties"])
-                self.assertFalse(start_schema["properties"]["settings"]["additionalProperties"])
-                self.assertIn("curl_max_time", start_schema["properties"]["settings"]["properties"])
-                self.assertNotIn("mode_settings", start_schema["properties"]["settings"]["properties"])
-                error_schema = openapi_contract["components"]["schemas"]["ErrorResponse"]
-                envelope_schema = error_schema["properties"]["error"]
-                self.assertEqual("object", envelope_schema["type"])
-                self.assertEqual(["code", "message", "details"], envelope_schema["required"])
-                self.assertEqual(
-                    {"error": {"code": "invalid_request", "message": "The request is invalid.", "details": {}}},
-                    examples["ErrorResponse"]["value"],
-                )
-                self.assertIn(
-                    "409",
-                    openapi_contract["paths"]["/api/core/strategy-discovery/stop-current-run"]["post"]["responses"],
-                )
-                self.assertNotIn(
-                    "404",
-                    openapi_contract["paths"]["/api/core/strategy-discovery/stop-current-run"]["post"]["responses"],
-                )
-                category_responses = openapi_contract["paths"]["/api/core/presets/v2fly/category-domains"]["get"]["responses"]
-                self.assertIn("400", category_responses)
-                self.assertNotIn("404", category_responses)
-                self.assertNotIn("503", category_responses)
-                categories_responses = openapi_contract["paths"]["/api/core/presets/v2fly/categories"]["get"]["responses"]
-                self.assertNotIn("503", categories_responses)
-                self.assertNotIn("InstallReleaseRequest", openapi_contract["components"]["schemas"])
-                self.assertNotIn("ReleaseInstallPlan", openapi_contract["components"]["schemas"])
-                self.assertNotIn("ReleaseUpdateInfo", openapi_contract["components"]["schemas"])
-                self.assertNotIn("ReleaseInstallAccepted", openapi_contract["components"]["schemas"])
-                self.assertNotIn("InstallChannel", openapi_contract["components"]["schemas"])
-                self.assertNotIn("InstallReleaseRequest", examples)
-                self.assertNotIn("ReleaseInstallPlanResponse", examples)
-                self.assertNotIn("ReleaseInstallAccepted", examples)
-                self.assertNotIn("InstallChannel", examples)
-                self.assertIn("CoreStatusRunning", examples)
-                self.assertIn("PagedStrategyCandidatesResponse", examples)
-                self.assertIn("PagedCandidateDomainIndexResponse", examples)
-                self.assertIn("WebRunPreferencesResponse", examples)
-                self.assertIn("WebRunPreferencesSaveRequest", examples)
-                self.assertIn("WebRunPreferencesResponse", openapi_contract["components"]["schemas"])
-                self.assertIn("WebRunPreferencesSaveRequest", openapi_contract["components"]["schemas"])
-                self.assertIn("PagedCandidateDomainIndexResponse", openapi_contract["components"]["schemas"])
-                self.assertIn("WebPresetsResponse", openapi_contract["components"]["schemas"])
-                self.assertIn("WebPresetDomainsResponse", openapi_contract["components"]["schemas"])
-                self.assertNotIn("/api/service/releases/install", openapi_contract["paths"])
-                if target is serve_core:
-                    self.assertNotIn("/api/web/candidate-domain-index-page", openapi_contract["paths"])
-                    self.assertNotIn("/api/web/presets", openapi_contract["paths"])
-                    self.assertNotIn("/api/web/presets/domains", openapi_contract["paths"])
-                    self.assertNotIn("/api/web/presets/save", openapi_contract["paths"])
-                    self.assertNotIn("/api/web/presets/delete-user-lists", openapi_contract["paths"])
-                    self.assertNotIn("/api/web/events/stream", openapi_contract["paths"])
-                else:
-                    self.assertIn("/api/web/candidate-domain-index-page", openapi_contract["paths"])
-                    self.assertIn("/api/web/presets", openapi_contract["paths"])
-                    self.assertIn("/api/web/presets/domains", openapi_contract["paths"])
-                    self.assertIn("/api/web/presets/save", openapi_contract["paths"])
-                    self.assertIn("/api/web/presets/delete-user-lists", openapi_contract["paths"])
-                    self.assertIn("/api/web/events/stream", openapi_contract["paths"])
-                web_preset_save_schema = openapi_contract["components"]["schemas"]["WebPresetSaveRequest"]
-                self.assertNotIn("minItems", web_preset_save_schema["properties"]["domains"])
-                runtime_busy_response = openapi_contract["components"]["responses"]["RuntimeBusy"]
-                self.assertEqual(
-                    {
-                        "error": {
-                            "code": "runtime_busy",
-                            "message": "The operation is unavailable while discovery is running.",
-                            "details": {},
-                        }
-                    },
-                    runtime_busy_response["content"]["application/json"]["examples"]["runtimeBusy"]["value"],
-                )
-                for backup_mutation_path in (
-                    "/api/core/backups/create",
-                    "/api/core/backups/restore",
-                    "/api/core/backups/delete",
-                    "/api/core/backups/upload",
-                ):
-                    responses = openapi_contract["paths"][backup_mutation_path]["post"]["responses"]
-                    self.assertEqual({"$ref": "#/components/responses/RuntimeBusy"}, responses["409"])
-                self.assertEqual(
-                    "legacy-root-apis-removed-in-alpha",
-                    openapi_contract["x-gp-decisions"]["legacy_api_compatibility"],
-                )
-                self.assertNotIn("/api/service/diagnostics", openapi_contract["paths"])
-                self.assertNotIn("ServiceDiagnostics", openapi_contract["components"]["schemas"])
-                self.assertNotIn("ServiceDiagnostics", examples)
-                log_tail_schema = openapi_contract["components"]["schemas"]["RunLogTail"]
-                self.assertIn("stdout_tail", log_tail_schema["required"])
-                self.assertIn("stderr_tail", log_tail_schema["required"])
-                self.assertIn("progress", log_tail_schema["required"])
-                self.assertNotIn("lines", log_tail_schema["properties"])
-                self.assertNotIn("lines", examples["RunLogTail"]["value"])
-                self.assertIn(
-                    "multiDomain30Parallel",
-                    openapi_contract["paths"]["/api/core/strategy-discovery/start-run"]["post"]["requestBody"][
-                        "content"
-                    ]["application/json"]["examples"],
-                )
-                self.assertIn(
-                    "plainError",
-                    openapi_contract["components"]["responses"]["Error"]["content"]["application/json"]["examples"],
-                )
-                self.assertIn("/api/core/presets/delete-user-domain-list", openapi_contract["paths"])
-                self.assertNotIn("/api/core/presets/delete-user-lists", openapi_contract["paths"])
-                delete_schema = openapi_contract["components"]["schemas"]["DeleteDomainListRequest"]
-                self.assertEqual(["list_ids"], delete_schema["required"])
-                self.assertEqual(1, delete_schema["properties"]["list_ids"]["minItems"])
-
-                status, headers, body = _http_request(port, "/swagger")
-                swagger_html = body.decode("utf-8")
-                self.assertEqual(status, 200)
-                self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
-                self.assertIn("SwaggerUIBundle", swagger_html)
-                self.assertIn("url: '/openapi.json'", swagger_html)
-
-                status, headers, body = _http_request(port, "/swagger", method="HEAD")
-                self.assertEqual(status, 200)
-                self.assertEqual(headers.get("content-type"), "text/html; charset=utf-8")
-                self.assertEqual(body, b"")
-
-    def test_openapi_contract_matches_routes_auth_errors_and_identifiers(self) -> None:
-        for core_only in (False, True):
-            contract = json.loads(web_docs.openapi_json_bytes(core_only=core_only))
-            documented = {
-                (path, method.upper())
-                for path, operations in contract["paths"].items()
-                for method in operations
-            }
-            expected = {
-                (spec.path, method)
-                for spec in web_routes.ROUTES
-                if spec.openapi and (not core_only or spec.allowed_in_core)
-                for method in spec.methods
-                if method != "HEAD"
-            }
-            self.assertEqual(expected, documented)
-
-            for path, method in documented:
-                route = web_routes.route_for(method, path)
-                self.assertIsNotNone(route)
-                operation = contract["paths"][path][method.lower()]
-                expected_security = [] if not route.auth_required else [{"bearerAuth": []}]
-                self.assertEqual(expected_security, operation.get("security", contract["security"]))
-                for status, response in operation["responses"].items():
-                    if status == "default" or not status.startswith("2"):
-                        self.assertIn("$ref", response)
-                        self.assertIn(
-                            response["$ref"],
-                            {f"#/components/responses/{name}" for name in contract["components"]["responses"]},
-                        )
-
-            error_schema = contract["components"]["schemas"]["ErrorResponse"]["properties"]["error"]
-            self.assertEqual(["code", "message", "details"], error_schema["required"])
-            self.assertIn("saving", contract["components"]["schemas"]["RunStatus"]["enum"])
-            self.assertEqual(
-                "#/components/schemas/RunAccepted",
-                contract["paths"]["/api/core/strategy-discovery/stop-current-run"]["post"]["responses"]["202"]["content"][
-                    "application/json"
-                ]["schema"]["$ref"],
-            )
-            self.assertIn("run_id", contract["components"]["schemas"]["RunAccepted"]["properties"])
-            self.assertNotIn("/api/service/releases/install", contract["paths"])
-            self.assertNotIn("/api/service/releases/install-plan", contract["paths"])
-            self.assertNotIn("job_id", json.dumps(contract))
-
-        swagger_html = web_docs.swagger_ui_html()
-        self.assertIn("persistAuthorization: true", swagger_html)
-        self.assertIn("tryItOutEnabled: true", swagger_html)
-
-    def test_route_registry_defines_runtime_boundaries(self) -> None:
-        self.assertEqual("core", web_routes.route_for("GET", "/api/core/status").namespace)
-        self.assertEqual("core", web_routes.route_for("GET", "/api/core/backups/download-archive").namespace)
-        self.assertIsNone(web_routes.route_for("POST", "/api/service/releases/install"))
-        self.assertIsNone(web_routes.route_for("GET", "/api/service/releases/install-plan"))
-        self.assertEqual("web", web_routes.route_for("GET", "/api/web/status").namespace)
-        self.assertEqual("web", web_routes.route_for("GET", "/api/web/run-preferences").namespace)
-        self.assertEqual("web", web_routes.route_for("GET", "/api/web/candidate-domain-index-page").namespace)
-        self.assertEqual("web", web_routes.route_for("GET", "/api/web/presets").namespace)
-        self.assertEqual("web", web_routes.route_for("POST", "/api/web/presets/save").namespace)
-        self.assertEqual("web", web_routes.route_for("GET", "/api/web/events/stream").namespace)
-        self.assertIsNone(web_routes.route_for("GET", "/api/status"))
-        self.assertIsNone(web_routes.route_for("GET", "/api/core/backups/download-file"))
-        self.assertIsNone(web_routes.route_for("POST", "/api/settings"))
-        self.assertFalse(any(spec.namespace == "legacy" for spec in web_routes.ROUTES))
-        self.assertFalse(web_routes.route_for("GET", "/").allowed_in_core)
-        self.assertFalse(web_routes.route_for("GET", "/api/web/run-preferences").allowed_in_core)
-        self.assertFalse(web_routes.route_for("GET", "/api/web/events/stream").allowed_in_core)
-        web_only_paths = {spec.path for spec in web_routes.ROUTES if spec.namespace == "web"}
-        self.assertEqual(
-            web_only_paths,
-            {spec.path for spec in web_routes.ROUTES if not spec.allowed_in_core},
-        )
-        self.assertTrue(
-            all(spec.allowed_in_core for spec in web_routes.ROUTES if spec.namespace in {"core", "service", "openapi"})
-        )
-        self.assertIn("/api/core/status", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertNotIn("/api/core/backups/download-file", web_routes.route_paths(method="GET"))
-        self.assertIn("/api/service/status", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertNotIn("/api/service/releases/install-plan", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertIn("/api/web/status", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertIn("/api/web/run-preferences", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertIn("/api/web/candidate-domain-index-page", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertIn("/api/web/presets", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertIn("/api/web/presets/domains", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertNotIn("/api/status", web_routes.JSON_GET_ROUTE_PATHS)
-        self.assertNotIn("/api/status", web_routes.JSON_HEAD_ROUTE_PATHS)
-        self.assertIn("/api/core/strategy-discovery/start-run", web_routes.JSON_POST_ROUTE_PATHS)
-        self.assertIn("/api/web/presets/save", web_routes.JSON_POST_ROUTE_PATHS)
-        self.assertIn("/api/web/presets/delete-user-lists", web_routes.JSON_POST_ROUTE_PATHS)
-        self.assertEqual({"/api/core/backups/upload"}, web_routes.UPLOAD_ROUTE_PATHS)
-
-    def test_app_api_literals_are_registered_routes(self) -> None:
-        source_path = Path(web_app.__file__)
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        api_literals = {
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value.startswith("/api/")
-            and not node.value.endswith("/")
-        }
-        registered = {spec.path for spec in web_routes.ROUTES if spec.path.startswith("/api/")}
-        self.assertFalse(api_literals - registered)
-
-    def test_legacy_api_routes_return_not_found_in_alpha_runtimes(self) -> None:
-        representative_legacy_requests = [
-            ("GET", "/api/status", None, {}),
-            ("POST", "/api/settings", {"settings": {"curl_parallelism_max": 12}}, {}),
-            ("POST", "/api/settings", b"{", {"Content-Type": "application/json"}),
-            ("GET", "/api/events", None, {}),
-            ("GET", "/api/diagnostics", None, {}),
-            ("POST", "/api/presets/save", {"scope": "finder", "name": "work", "domains": ["youtube.com"]}, {}),
-            ("POST", "/api/presets/save", b"01234567890", {"Content-Type": "application/json"}),
-            ("POST", "/api/backups/create", {}, {}),
-            ("GET", "/api/releases/update-plan", None, {}),
-        ]
-
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            with mock.patch.object(web_app, "MAX_JSON_REQUEST_BYTES", 10):
-                monolith_port = start_server(serve, config).port
-                core_port = start_server(serve_core, config).port
-                proxy_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-                for port in (monolith_port, core_port, proxy_port):
-                    for method, path, payload, headers in representative_legacy_requests:
-                        if isinstance(payload, bytes):
-                            raw_body = payload
-                        elif payload is not None:
-                            raw_body = json.dumps(payload).encode("utf-8")
-                        else:
-                            raw_body = None
-                        request_headers = dict(headers)
-                        request_headers.setdefault("Authorization", _bearer_authorization_for_state(config.output.state_dir))
-                        if raw_body is not None and "Content-Type" not in request_headers:
-                            request_headers["Content-Type"] = "application/json"
-                        status, response_headers, body = _http_request(
-                            port,
-                            path,
-                            method=method,
-                            body=raw_body,
-                            headers=request_headers,
-                        )
-                        message = (port, method, path, body.decode("utf-8", errors="replace"))
-                        self.assertEqual(status, 404, message)
-                        self.assertEqual(response_headers.get("content-type"), "application/json; charset=utf-8", message)
-
-    def test_core_server_does_not_import_web_app_runtime(self) -> None:
-        from gp_control_plane.web import core_server
-
-        source = Path(core_server.__file__).read_text(encoding="utf-8")
-        self.assertNotIn("from .app import", source)
-        self.assertNotIn("gp_control_plane.web.app", source)
-
-    def test_core_server_uses_api_server_entrypoint(self) -> None:
-        from gp_control_plane.web import api_server, core_server
-
-        config = AppConfig(output=OutputConfig(state_dir=Path("unused-state")))
-        with mock.patch.object(api_server, "serve") as serve_mock:
-            core_server.serve_core(config, host="127.0.0.1", port=18081)
-
-        serve_mock.assert_called_once_with(config, host="127.0.0.1", port=18081, ui_enabled=False)
-
-    def test_web_app_is_api_server_compatibility_alias(self) -> None:
-        app_module = importlib.import_module("gp_control_plane.web.app")
-        api_module = importlib.import_module("gp_control_plane.web.api_server")
-
-        self.assertIs(app_module, api_module)
-
-    def test_openapi_paths_are_callable_through_web_runtime(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            web_app.save_settings(config, {"curl_parallelism_max": 50, "curl_parallelism_default": 10})
-            snapshot = web_app.create_snapshot_if_idle(config.output.state_dir)["snapshot"]["id"]
-            release = {
-                "channel": "stable",
-                "available_version": "v0.0.0-test",
-                "url": "https://example.invalid/release",
-                "published_at": "",
-            }
-            with (
-                mock.patch.object(web_app.service_api, "release_channel_info", return_value=release),
-                mock.patch.object(web_app.service_api, "fetch_v2fly_revision", return_value="remote-test-revision"),
-                mock.patch.object(web_app.service_api, "prepare_v2fly_local_storage", return_value={"count": 0}),
-                mock.patch.object(
-                    web_app.core_api,
-                    "create_clean_install_vault",
-                    return_value={
-                        "vault_id": "a" * 32,
-                        "handoff_secret": "SAFE-HANDOFF-001-KNOWN-SECRET",
-                        "archive_sha256": "b" * 64,
-                        "archive_size_bytes": 12,
-                        "schema_version": "7",
-                        "semantic_manifest": {},
-                    },
-                ),
-                mock.patch.object(
-                    web_app.core_api,
-                    "clean_install_vault_info",
-                    return_value={
-                        "exists": True,
-                        "pending": True,
-                        "vault_id": "a" * 32,
-                        "created_at": "2026-08-21T12:00:00Z",
-                        "schema_version": "7",
-                        "archive_sha256": "b" * 64,
-                        "archive_size_bytes": 12,
-                        "verification": "pending",
-                    },
-                ),
-                mock.patch.object(
-                    web_app.core_api,
-                    "restore_clean_install_vault",
-                    return_value={
-                        "completed": True,
-                        "vault_id": "a" * 32,
-                        "verification": {"verified": True},
-                        "cleanup": {"source_deleted": True},
-                    },
-                ),
-            ):
-                port = start_server(serve, config).port
-
-                cases = [
-                    ("GET", "/api/health", None, {}),
-                    ("POST", "/api/auth/login", {"username": "admin", "password": "admin"}, {}),
-                    ("POST", "/api/auth/change-password", {"current_password": "admin", "new_password": "short"}, {}),
-                    ("GET", "/api/core/status", None, {}),
-                    ("POST", "/api/core/strategy-discovery/start-run", {"mode": "bad", "domains": ["youtube.com"]}, {}),
-                    ("POST", "/api/core/strategy-discovery/stop-current-run", {"dry_run": True}, {}),
-                    ("GET", "/api/core/strategy-discovery/current-run-progress", None, {}),
-                    ("GET", "/api/core/strategy-discovery/current-run-latest-log", None, {}),
-                    ("GET", "/api/core/strategy-discovery/preflight", None, {}),
-                    ("GET", "/api/core/presets/domain-lists", None, {}),
-                    ("POST", "/api/core/presets/save-domain-list", {"kind": "user", "name": "work", "domains": ["youtube.com"]}, {}),
-                    ("POST", "/api/core/presets/save-domain-list", {"kind": "user", "name": "games", "domains": ["discord.com"]}, {}),
-                    ("POST", "/api/core/presets/delete-user-domain-list", {"list_ids": ["user:work", "user:games"]}, {}),
-                    ("GET", "/api/core/presets/v2fly/categories", None, {}),
-                    ("GET", "/api/core/presets/v2fly/category-domains?category=missing", None, {}),
-                    ("POST", "/api/core/backups/create", {}, {}),
-                    ("GET", "/api/core/backups/list", None, {}),
-                    ("POST", "/api/core/backups/restore", {"snapshot_id": "missing"}, {}),
-                    ("POST", "/api/core/backups/delete", {"snapshot_id": "missing"}, {}),
-                    ("GET", f"/api/core/backups/download-archive?snapshot_id={snapshot}", None, {}),
-                    ("POST", "/api/core/backups/upload", b"not-a-zip", {"Content-Type": "application/zip"}),
-                    ("POST", "/api/core/clean-install-vaults/create", {}, {}),
-                    ("GET", "/api/core/clean-install-vaults/list", None, {}),
-                    ("GET", "/api/core/clean-install-vaults/status?vault_id=" + ("a" * 32), None, {}),
-                    (
-                        "POST",
-                        "/api/core/clean-install-vaults/restore",
-                        {"vault_id": "a" * 32},
-                        {},
-                    ),
-                    ("GET", "/api/core/run-settings", None, {}),
-                    ("POST", "/api/core/run-settings/save", {"curl_parallelism_default": 10, "curl_parallelism_max": 50}, {}),
-                    ("GET", "/api/core/runs/history", None, {}),
-                    ("GET", "/api/core/runs/latest-log", None, {}),
-                    ("GET", "/api/core/strategy-candidates?domain=youtube.com", None, {}),
-                    ("GET", "/api/core/strategy-candidates/export", None, {}),
-                    ("GET", "/api/core/events", None, {}),
-                    ("GET", "/api/service/status", None, {}),
-                    ("GET", "/api/service/releases/available", None, {}),
-                    ("GET", "/api/service/v2fly/local-storage-status", None, {}),
-                    ("POST", "/api/service/v2fly/check-updates", {}, {}),
-                    ("POST", "/api/service/v2fly/update-local-storage", {"dry_run": True}, {}),
-                    ("GET", "/api/web/status", None, {}),
-                    ("GET", "/api/web/run-preferences", None, {}),
-                    ("POST", "/api/web/run-preferences", {"run_preferences": {"domains": ["youtube.com"], "run_mode": "multi"}}, {}),
-                    ("GET", "/api/web/runs/history-page", None, {}),
-                    ("GET", "/api/web/candidate-domain-index-page", None, {}),
-                    ("GET", "/api/web/strategy-candidates-page", None, {}),
-                    ("GET", "/api/web/presets", None, {}),
-                    ("GET", "/api/web/presets/domains?scope=finder&name=required&kind=system&limit=2", None, {}),
-                    ("POST", "/api/web/presets/save", {"scope": "finder", "name": "work", "domains": ["youtube.com"]}, {}),
-                    ("POST", "/api/web/presets/delete-user-lists", {"scope": "finder", "names": ["work"]}, {}),
-                    ("GET", "/api/web/events", None, {}),
-                    ("GET", "/api/web/events/stream", None, {"Accept": "text/event-stream"}),
-                ]
-                openapi = json.loads(web_app.openapi_json_bytes().decode("utf-8"))
-                expected = {(method.upper(), path) for path, ops in openapi["paths"].items() for method in ops}
-                requested = {(method, path.split("?", 1)[0]) for method, path, _body, _headers in cases}
-                self.assertEqual(expected, requested)
-
-                expected_json_fields = {
-                    ("GET", "/api/core/status"): {"state", "storage", "updated_at"},
-                    ("POST", "/api/core/strategy-discovery/stop-current-run"): {"accepted", "status", "run_id"},
-                    ("GET", "/api/core/strategy-discovery/current-run-progress"): {"run_id", "status", "stage", "current_file"},
-                    ("GET", "/api/core/strategy-discovery/current-run-latest-log"): {"stdout_tail", "stderr_tail", "progress"},
-                    ("GET", "/api/core/strategy-discovery/preflight"): {"ready", "checks"},
-                    ("GET", "/api/core/presets/domain-lists"): {"lists"},
-                    ("POST", "/api/core/presets/save-domain-list"): {"list_id", "kind", "name", "domains", "updated_at"},
-                    ("POST", "/api/core/presets/delete-user-domain-list"): {"deleted"},
-                    ("GET", "/api/core/presets/v2fly/categories"): {"categories", "storage"},
-                    ("POST", "/api/core/backups/create"): {"snapshot_id", "created_at", "filename", "size_bytes"},
-                    ("GET", "/api/core/backups/list"): {"backups"},
-                    ("POST", "/api/core/clean-install-vaults/create"): {
-                        "vault_id", "archive_sha256", "archive_size_bytes", "schema_version", "semantic_manifest"
-                    },
-                    ("GET", "/api/core/clean-install-vaults/list"): {"vaults"},
-                    ("GET", "/api/core/clean-install-vaults/status"): {
-                        "vault_id", "created_at", "schema_version", "archive_sha256", "archive_size_bytes", "verification", "pending"
-                    },
-                    ("POST", "/api/core/clean-install-vaults/restore"): {"completed", "vault_id", "verification", "cleanup"},
-                    ("GET", "/api/core/run-settings"): {
-                        "curl_parallelism_default",
-                        "curl_parallelism_max",
-                        "curl_max_time",
-                        "curl_max_time_quic",
-                        "curl_max_time_doh",
-                        "enable_ipv6",
-                        "debug_stdout",
-                    },
-                    ("POST", "/api/core/run-settings/save"): {
-                        "curl_parallelism_default",
-                        "curl_parallelism_max",
-                        "curl_max_time",
-                        "curl_max_time_quic",
-                        "curl_max_time_doh",
-                        "enable_ipv6",
-                        "debug_stdout",
-                    },
-                    ("GET", "/api/core/runs/history"): {"runs"},
-                    ("GET", "/api/core/runs/latest-log"): {"stdout_tail", "stderr_tail", "progress"},
-                    ("GET", "/api/core/strategy-candidates"): {"candidates", "total", "filters"},
-                    ("GET", "/api/core/events"): {"events", "next_after_id"},
-                    ("GET", "/api/service/status"): {"state", "mode", "services", "version", "data_state", "updated_at"},
-                    ("GET", "/api/service/releases/available"): {"current", "releases", "stable_release_url", "prerelease_url"},
-                    ("GET", "/api/service/v2fly/local-storage-status"): {
-                        "state",
-                        "source_repo",
-                        "source_ref",
-                        "source_commit",
-                        "prepared_at",
-                        "group_count",
-                        "last_update_check",
-                    },
-                    ("POST", "/api/service/v2fly/check-updates"): {"status", "operation_id", "storage"},
-                    ("POST", "/api/service/v2fly/update-local-storage"): {"status", "operation_id", "storage"},
-                    ("GET", "/api/web/status"): {"version", "state", "settings", "run_preferences", "zapret2"},
-                    ("GET", "/api/web/run-preferences"): {"run_preferences"},
-                    ("POST", "/api/web/run-preferences"): {"run_preferences"},
-                    ("GET", "/api/web/runs/history-page"): {"runs", "total", "limit", "offset", "has_more"},
-                    ("GET", "/api/web/candidate-domain-index-page"): {"domains", "total", "strategy_total", "limit", "offset", "has_more"},
-                    ("GET", "/api/web/strategy-candidates-page"): {"candidates", "total", "limit", "offset", "has_more"},
-                    ("GET", "/api/web/presets"): {"metadata", "system_metadata", "custom", "system", "domain_sets", "builtin"},
-                    ("GET", "/api/web/presets/domains"): {"scope", "name", "kind", "domains", "total", "limit", "offset", "has_more"},
-                    ("POST", "/api/web/presets/save"): {"metadata", "system_metadata", "custom", "system", "domain_sets", "builtin"},
-                    ("POST", "/api/web/presets/delete-user-lists"): {
-                        "metadata",
-                        "system_metadata",
-                        "custom",
-                        "system",
-                        "domain_sets",
-                        "builtin",
-                    },
-                    ("GET", "/api/web/events"): {"events", "next_after_id"},
-                }
-
-                for method, path, body, headers in cases:
-                    raw_body = body if isinstance(body, bytes) else (json.dumps(body).encode("utf-8") if body is not None else None)
-                    request_headers = dict(headers)
-                    if raw_body is not None and "Content-Type" not in request_headers:
-                        request_headers["Content-Type"] = "application/json"
-                    base_path = path.split("?", 1)[0]
-                    if base_path == "/api/web/events/stream":
-                        status, response_headers, first_line, second_line = _http_sse_first_event(port, path)
-                        message = (method, path, status, first_line, second_line)
-                        self.assertEqual(status, 200, message)
-                        self.assertEqual(response_headers.get("content-type"), "text/event-stream; charset=utf-8", message)
-                        self.assertEqual(first_line, "event: status", message)
-                        self.assertTrue(second_line.startswith("data:"), message)
-                        continue
-                    status, _response_headers, response_body = _http_request(
-                        port,
-                        path,
-                        method=method,
-                        body=raw_body,
-                        headers=request_headers,
-                    )
-                    message = (method, path, response_body.decode("utf-8", errors="replace"))
-                    self.assertNotEqual(status, 404, message)
-                    if base_path == "/api/core/backups/download-archive":
-                        self.assertEqual(status, 200, message)
-                        continue
-                    if base_path == "/api/core/strategy-candidates/export":
-                        self.assertEqual(status, 200, message)
-                        self.assertEqual(_response_headers.get("content-type"), "application/x-ndjson; charset=utf-8", message)
-                        continue
-                    self.assertEqual(_response_headers.get("content-type"), "application/json; charset=utf-8", message)
-                    response_payload = json.loads(response_body.decode("utf-8"))
-                    if status >= 400:
-                        self.assertIn("error", response_payload, message)
-                        continue
-                    for field in expected_json_fields.get((method, base_path), set()):
-                        self.assertIn(field, response_payload, message)
-
-                status, headers, body = _http_request(port, "/api/web/events/stream", method="HEAD")
-                self.assertEqual(status, 200)
-                self.assertEqual(headers.get("content-type"), "text/event-stream; charset=utf-8")
-                self.assertEqual(body, b"")
-
-                old_status, old_headers, old_body = _http_request(
-                    port,
-                    f"/api/core/backups/download-file?snapshot_id={snapshot}",
-                )
-                self.assertEqual(old_status, 404)
-                self.assertEqual(old_headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertIn("not found", old_body.decode("utf-8"))
-
-    def test_openapi_paths_are_callable_through_split_core_and_web_proxy_runtime(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            web_app.save_settings(config, {"curl_parallelism_max": 50, "curl_parallelism_default": 10})
-            snapshot = web_app.create_snapshot_if_idle(config.output.state_dir)["snapshot"]["id"]
-            release = {
-                "channel": "stable",
-                "available_version": "v0.0.0-test",
-                "url": "https://example.invalid/release",
-                "published_at": "",
-            }
-
-            def create_post_run_snapshot(_state_dir: Path) -> dict[str, object]:
-                return {
-                    "kind": "snapshot",
-                    "status": "success",
-                    "completed_at": "2026-08-13T00:00:00Z",
-                    "snapshot_id": "openapi-contract-post-run-snapshot",
-                    "snapshot": {"id": "openapi-contract-post-run-snapshot"},
-                }
-
-            with (
-                mock.patch.object(web_app, "run_multi_domain_discovery", return_value={"status": "success"}),
-                mock.patch.object(web_app, "run_standard_discovery", return_value={"status": "success"}),
-                mock.patch.object(web_app.service_api, "release_channel_info", return_value=release),
-                mock.patch.object(web_app.service_api, "fetch_v2fly_revision", return_value="remote-test-revision"),
-                mock.patch.object(web_app.service_api, "prepare_v2fly_local_storage", return_value={"count": 0}),
-                mock.patch.object(web_app, "create_post_run_snapshot", side_effect=create_post_run_snapshot) as post_run_snapshot,
-                _JobRunnerThreadTracker() as runner_threads,
-            ):
-                core_port = start_server(serve_core, config).port
-                web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-                openapi_contract = json.loads(
-                    web_app.openapi_json_bytes().decode("utf-8"),
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                core_openapi_status, core_openapi_headers, core_openapi_body = _http_request(core_port, "/openapi.json")
-                proxy_openapi_status, proxy_openapi_headers, proxy_openapi_body = _http_request(web_port, "/openapi.json")
-                self.assertEqual(core_openapi_status, 200)
-                self.assertEqual(core_openapi_headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertEqual(proxy_openapi_status, 200)
-                self.assertEqual(proxy_openapi_headers.get("content-type"), "application/json; charset=utf-8")
-                full_openapi_text = web_app.openapi_json_bytes().decode("utf-8")
-                core_openapi_text = core_openapi_body.decode("utf-8")
-                proxy_openapi_text = proxy_openapi_body.decode("utf-8")
-                self.assertIn("/api/web", full_openapi_text)
-                self.assertIn("/api/web", proxy_openapi_text)
-                core_openapi_contract = json.loads(
-                    core_openapi_text,
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                proxy_openapi_contract = json.loads(
-                    proxy_openapi_text,
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                core_openapi_operations = {
-                    (path, method.upper())
-                    for path, operations in core_openapi_contract["paths"].items()
-                    for method in operations
-                }
-                proxy_openapi_operations = {
-                    (path, method.upper())
-                    for path, operations in proxy_openapi_contract["paths"].items()
-                    for method in operations
-                }
-                self.assertEqual(core_openapi_operations, web_routes.openapi_operations(core_only=True))
-                self.assertFalse(any(path.startswith("/api/web/") for path in core_openapi_contract["paths"]))
-                self.assertEqual(proxy_openapi_operations, web_routes.openapi_operations())
-                self.assertTrue(any(path.startswith("/api/web/") for path in proxy_openapi_contract["paths"]))
-                expected = {(method.upper(), path) for path, ops in openapi_contract["paths"].items() for method in ops}
-                web_expected = {
-                    (method, path)
-                    for method, path in expected
-                    if web_routes.route_for(method, path) and web_routes.route_for(method, path).namespace == "web"
-                }
-                core_checked: set[tuple[str, str]] = set()
-                proxy_checked: set[tuple[str, str]] = set()
-                successful_start_requests = 0
-                for runtime, port in (("core", core_port), ("proxy", web_port)):
-                    for path, operations in openapi_contract["paths"].items():
-                        for raw_method, operation in operations.items():
-                            method = raw_method.upper()
-                            request_path, raw_body, request_headers = _openapi_test_request(
-                                openapi_contract,
-                                path,
-                                method,
-                                operation,
-                                snapshot,
-                            )
-                            route = web_routes.route_for(method, path)
-                            if runtime == "core" and route and route.namespace == "web":
-                                status, _headers, response_body = _http_request(
-                                    port,
-                                    request_path,
-                                    method=method,
-                                    body=raw_body,
-                                    headers=request_headers,
-                                )
-                                message = (runtime, method, request_path, status, response_body.decode("utf-8", errors="replace")[:500])
-                                self.assertEqual(status, 404, message)
-                                continue
-                            if path == "/api/web/events/stream" and method == "GET":
-                                status, headers, first_line, second_line = _http_sse_first_event(port, request_path)
-                                message = (runtime, method, request_path, status, first_line, second_line)
-                                proxy_checked.add((method, path))
-                                self.assertEqual(status, 200, message)
-                                self.assertEqual(headers.get("content-type"), "text/event-stream; charset=utf-8", message)
-                                self.assertEqual(first_line, "event: status", message)
-                                self.assertTrue(second_line.startswith("data:"), message)
-                                continue
-                            status, headers, response_body = _http_request(
-                                port,
-                                request_path,
-                                method=method,
-                                body=raw_body,
-                                headers=request_headers,
-                            )
-                            message = (runtime, method, request_path, status, response_body.decode("utf-8", errors="replace")[:500])
-                            if runtime == "core":
-                                core_checked.add((method, path))
-                            else:
-                                proxy_checked.add((method, path))
-                            _assert_openapi_response_contract(
-                                self,
-                                openapi_contract,
-                                operation,
-                                status,
-                                headers,
-                                response_body,
-                                context=message,
-                            )
-                            if path == "/api/core/backups/download-archive" and status == 200:
-                                self.assertGreater(len(response_body), 0, message)
-                            if path == "/api/core/strategy-discovery/start-run" and method == "POST":
-                                self.assertEqual(status, 202, message)
-                                successful_start_requests += 1
-                                runner_threads.join_tracked()
-
-                core_head_status, core_head_headers, core_head_body = _http_request(
-                    core_port,
-                    "/api/web/events/stream",
-                    method="HEAD",
-                )
-                proxy_head_status, proxy_head_headers, proxy_head_body = _http_request(
-                    web_port,
-                    "/api/web/events/stream",
-                    method="HEAD",
-                )
-                self.assertEqual(core_head_status, 404)
-                self.assertEqual(core_head_headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertEqual(core_head_body, b"")
-                self.assertEqual(proxy_head_status, 200)
-                self.assertEqual(proxy_head_headers.get("content-type"), "text/event-stream; charset=utf-8")
-                self.assertEqual(proxy_head_body, b"")
-                self.assertEqual(expected - web_expected, core_checked)
-                self.assertEqual(expected, proxy_checked)
-                self.assertEqual(successful_start_requests, 2)
-                self.assertEqual(runner_threads.tracked_count, successful_start_requests)
-                self.assertEqual(post_run_snapshot.call_count, successful_start_requests)
-
-                for runtime, port in (("core", core_port), ("proxy", web_port)):
-                    old_status, old_headers, old_body = _http_request(
-                        port,
-                        f"/api/core/backups/download-file?snapshot_id={snapshot}",
-                    )
-                    self.assertEqual(old_status, 404, runtime)
-                    self.assertEqual(old_headers.get("content-type"), "application/json; charset=utf-8", runtime)
-                    self.assertIn("not found", old_body.decode("utf-8"), runtime)
 
     def test_core_delete_user_domain_lists_requires_explicit_non_empty_ids(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -3121,6 +650,7 @@ window.addEventListener('load', async () => {
             self.assertNotIn("user:work", list_ids)
             self.assertNotIn("user:games", list_ids)
 
+
     def test_core_error_contract_returns_plain_error_payloads(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
@@ -3144,6 +674,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(status, 400)
             self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
             self.assertApiError(payload, "invalid_request")
+
 
     def test_core_and_service_v2fly_storage_status_use_same_formatter(self) -> None:
         from gp_control_plane.domain_sources import write_v2fly_catalog_cache
@@ -3174,6 +705,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(core_payload["state"], "ready")
             self.assertEqual(core_payload["source_commit"], "local-revision")
             self.assertEqual(core_payload["last_update_check"]["remote_revision"], "remote-revision")
+
 
     def test_service_v2fly_update_conflicts_when_runtime_lock_exists(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -3215,6 +747,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(dry_payload["status"], "dry_run")
             self.assertEqual(dry_payload["operation_id"], "v2fly-update-local-storage")
             self.assertNotIn("accepted", dry_payload)
+
 
     def test_service_v2fly_update_rejects_a_parallel_request_without_second_prepare(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -3266,6 +799,7 @@ window.addEventListener('load', async () => {
             self.assertApiError(json.loads(second_body.decode("utf-8")), "conflict")
             self.assertEqual(calls, 1)
 
+
     def test_v2fly_catalog_reads_wait_for_an_in_progress_update(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
@@ -3309,6 +843,7 @@ window.addEventListener('load', async () => {
             self.assertFalse(reader_thread.is_alive())
             self.assertEqual(reader["response"][0], 200)
 
+
     def test_core_start_run_conflicts_when_state_idle_but_runner_lock_exists(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
@@ -3334,6 +869,7 @@ window.addEventListener('load', async () => {
             self.assertApiError(payload, "conflict")
             self.assertIsNone(read_state(config.output.state_dir)["current_run_id"])
 
+
     def test_ingress_budget_rejects_oversize_json_without_mutating_state(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
@@ -3354,6 +890,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
             self.assertApiError(json.loads(body.decode("utf-8")), "request_too_large")
             self.assertNotIn("settings", read_state(config.output.state_dir))
+
 
     def test_backup_upload_rejects_oversize_before_import(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -3376,6 +913,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(status, 413)
             self.assertApiError(json.loads(body.decode("utf-8")), "request_too_large")
             import_mock.assert_not_called()
+
 
     def test_backup_mutations_return_runtime_busy_while_list_and_download_remain_available(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -3424,193 +962,6 @@ window.addEventListener('load', async () => {
                 self.assertEqual(response_headers.get("content-type"), "application/json; charset=utf-8", message)
                 self.assertApiError(json.loads(response_body.decode("utf-8")), "runtime_busy")
 
-    def test_web_proxy_serves_ui_and_forwards_api_to_core(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(
-                output=OutputConfig(
-                    state_dir=tmp / "state",
-                ),
-            )
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-            connection = http.client.HTTPConnection("127.0.0.1", web_port, timeout=5)
-            connection.request("GET", "/")
-            root_response = connection.getresponse()
-            root_body = root_response.read().decode("utf-8")
-            connection.close()
-
-            core_status, _core_headers, core_body = _http_request(web_port, "/api/core/status")
-            service_status, _service_headers, service_body = _http_request(web_port, "/api/service/status")
-            web_system_status, _web_system_headers, web_system_body = _http_request(web_port, "/api/web/status")
-            web_status, _web_headers, web_body = _http_request(web_port, "/api/web/run-preferences")
-            legacy_status, _legacy_headers, legacy_body = _http_request(web_port, "/api/status")
-
-            self.assertEqual(root_response.status, 200)
-            self.assertIn("<!doctype html>", root_body.lower())
-            self.assertEqual(core_status, 200)
-            self.assertIn('"state"', core_body.decode("utf-8"))
-            self.assertEqual(service_status, 200)
-            self.assertIn('"version"', service_body.decode("utf-8"))
-            self.assertEqual(web_system_status, 200)
-            self.assertIn('"zapret2"', web_system_body.decode("utf-8"))
-            self.assertEqual(web_status, 200)
-            self.assertIn('"run_preferences"', web_body.decode("utf-8"))
-            self.assertEqual(legacy_status, 404)
-            self.assertIn("not found", legacy_body.decode("utf-8"))
-
-    def test_web_proxy_forwards_post_body_and_query_to_core(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-            status, headers, body = _http_request(
-                web_port,
-                "/api/core/run-settings/save",
-                method="POST",
-                body=json.dumps({"curl_parallelism_default": 17, "curl_parallelism_max": 50}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
-            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
-            self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertEqual(17, json.loads(body.decode("utf-8"))["curl_parallelism_default"])
-
-            status, _headers, body = _http_request(web_port, "/api/web/runs/history-page?limit=1&offset=2")
-            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
-            page = json.loads(body.decode("utf-8"))
-            self.assertEqual(1, page["limit"])
-            self.assertEqual(2, page["offset"])
-
-    def test_web_proxy_rejects_oversize_api_body_without_forwarding_to_core(self) -> None:
-        from gp_control_plane.web import proxy as proxy_module
-
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            authorization = _bearer_authorization_for_state(config.output.state_dir)
-            with mock.patch("gp_control_plane.web.http_body.JSON_REQUEST_MAX_BYTES", 10):
-                core_port = start_server(serve_core, config).port
-                web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-                status, headers, body = _http_request(
-                    web_port,
-                    "/api/core/run-settings/save",
-                    method="POST",
-                    body=b'{"curl_parallelism_default":17}',
-                    headers={"Content-Type": "application/json", "Authorization": authorization},
-                )
-
-            self.assertEqual(status, 413)
-            self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertApiError(json.loads(body.decode("utf-8")), "request_too_large")
-            self.assertNotIn("settings", read_state(config.output.state_dir))
-
-    def test_web_proxy_serves_head_requests_without_body(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-            root_status, root_headers, root_body = _http_request(web_port, "/", method="HEAD")
-            openapi_status, openapi_headers, openapi_body = _http_request(web_port, "/openapi.json", method="HEAD")
-
-            self.assertEqual(root_status, 200)
-            self.assertEqual(root_headers.get("content-type"), "text/html; charset=utf-8")
-            self.assertGreater(int(root_headers.get("content-length") or "0"), 0)
-            self.assertEqual(root_body, b"")
-            self.assertEqual(openapi_status, 200)
-            self.assertEqual(openapi_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertGreater(int(openapi_headers.get("content-length") or "0"), 0)
-            self.assertEqual(openapi_body, b"")
-
-    def test_web_proxy_rejects_invalid_core_url_before_listening(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-
-            with self.assertRaisesRegex(ValueError, "core_url must be an http\\(s\\) URL with host"):
-                serve_web_proxy(config, "127.0.0.1", 0, core_url="127.0.0.1:8081")
-
-    def test_web_proxy_reports_bad_gateway_when_core_is_unavailable(self) -> None:
-        with (
-            _captured_server_temporary_directory() as (raw, start_server),
-            _reserved_unavailable_loopback_port() as unused_core_port,
-        ):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{unused_core_port}").port
-            protected_headers = {"Authorization": _bearer_authorization_for_state(config.output.state_dir)}
-
-            openapi_status, openapi_headers, openapi_body = _http_request(web_port, "/openapi.json")
-            swagger_status, swagger_headers, swagger_body = _http_request(web_port, "/swagger")
-            core_status, _, core_body = _http_request(web_port, "/api/core/status", headers=protected_headers)
-            web_system_status, web_system_headers, web_system_body = _http_request(
-                web_port, "/api/web/status", headers=protected_headers
-            )
-            web_status, web_headers, web_body = _http_request(web_port, "/api/web/run-preferences", headers=protected_headers)
-            legacy_status, legacy_headers, legacy_body = _http_request(web_port, "/api/status", headers=protected_headers)
-            unknown_status, unknown_headers, unknown_body = _http_request(web_port, "/api/unknown", headers=protected_headers)
-
-            self.assertEqual(openapi_status, 200)
-            self.assertEqual(openapi_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertIn("/api/web/run-preferences", json.loads(openapi_body.decode("utf-8"))["paths"])
-            self.assertEqual(swagger_status, 200)
-            self.assertEqual(swagger_headers.get("content-type"), "text/html; charset=utf-8")
-            self.assertIn("SwaggerUIBundle", swagger_body.decode("utf-8"))
-            self.assertEqual(core_status, 502)
-            self.assertApiError(json.loads(core_body.decode("utf-8")), "core_unavailable")
-            self.assertEqual(web_system_status, 502)
-            self.assertEqual(web_system_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertApiError(json.loads(web_system_body.decode("utf-8")), "core_unavailable")
-            self.assertEqual(web_status, 502)
-            self.assertEqual(web_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertApiError(json.loads(web_body.decode("utf-8")), "core_unavailable")
-            self.assertEqual(legacy_status, 502)
-            self.assertEqual(legacy_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertApiError(json.loads(legacy_body.decode("utf-8")), "core_unavailable")
-            self.assertEqual(unknown_status, 502)
-            self.assertEqual(unknown_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertApiError(json.loads(unknown_body.decode("utf-8")), "core_unavailable")
-
-    def test_web_proxy_reports_core_unavailable_for_unknown_protected_routes_with_dead_core(self) -> None:
-        from gp_control_plane.web import proxy as proxy_module
-
-        with (
-            _captured_server_temporary_directory() as (raw, start_server),
-            _reserved_unavailable_loopback_port() as unused_core_port,
-        ):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            authorization = _bearer_authorization_for_state(config.output.state_dir)
-            with mock.patch("gp_control_plane.web.http_body.JSON_REQUEST_MAX_BYTES", 8):
-                web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{unused_core_port}").port
-
-                cases = (
-                    ("GET", "/api/core/not-a-route", None, {}),
-                    ("GET", "/api/service/not-a-route", None, {}),
-                    ("POST", "/api/core/not-a-route", b"{bad", {"Content-Type": "application/json"}),
-                    ("POST", "/api/service/not-a-route", b"{bad", {"Content-Type": "application/json"}),
-                    ("POST", "/api/core/not-a-route", b'{"oversized":true}', {"Content-Type": "application/json"}),
-                    ("POST", "/api/service/not-a-route", b'{"oversized":true}', {"Content-Type": "application/json"}),
-                )
-                for method, path, request_body, request_headers in cases:
-                    request_headers["Authorization"] = authorization
-                    status, response_headers, response_body = _http_request(
-                        web_port,
-                        path,
-                        method=method,
-                        body=request_body,
-                        headers=request_headers,
-                    )
-                    message = (method, path, response_body.decode("utf-8", errors="replace"))
-                    self.assertEqual(status, 502, message)
-                    self.assertEqual(response_headers.get("content-type"), "application/json; charset=utf-8")
-                    self.assertApiError(json.loads(response_body.decode("utf-8")), "core_unavailable")
-                    self.assertNotIn("core api is unavailable", response_body.decode("utf-8"), message)
-                    self.assertNotIn("request body is too large", response_body.decode("utf-8"), message)
 
     def test_protected_api_requires_bearer_token_before_app_logic(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -3630,34 +981,7 @@ window.addEventListener('load', async () => {
             status, _headers, body = _http_request(port, "/api/core/backups/list")
             self.assertEqual(status, 200)
             self.assertIn('"backups"', body.decode("utf-8"))
-    def test_web_events_stream_endpoint_streams_sse_status(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            tmp = Path(raw)
-            config = AppConfig(
-                output=OutputConfig(
-                    state_dir=tmp / "state",
-                ),
-            )
-            server = _start_captured_server(serve, config)
-            connection = response = None
-            with _cleanup_scope() as cleanup:
-                cleanup.add("SSE server close", server.close)
-                connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
-                connection.request("GET", "/api/web/events/stream", headers=_authenticated_headers(server.port))
-                response = connection.getresponse()
-                cleanup.add(
-                    "SSE status write after disconnect",
-                    lambda: web_app.save_run_settings(config, {"curl_parallelism_default": 17}),
-                )
-                cleanup.add("SSE active request connection close", server.close_active_request_connections)
-                cleanup.add("SSE stream close", lambda: _close_sse_stream(connection, response))
-                first_line = response.readline().decode("utf-8").strip()
-                second_line = response.readline().decode("utf-8").strip()
 
-                self.assertEqual(response.status, 200)
-                self.assertEqual(response.getheader("Content-Type"), "text/event-stream; charset=utf-8")
-                self.assertEqual(first_line, "event: status")
-                self.assertTrue(second_line.startswith("data:"))
 
     def test_captured_server_close_keeps_handler_timeout_bounded(self) -> None:
         server = mock.Mock()
@@ -3680,6 +1004,7 @@ window.addEventListener('load', async () => {
         self.assertLess(timeout, float("inf"))
         server.server_close.assert_not_called()
         base_server_close.assert_called_once_with(server)
+
 
     def test_captured_server_context_flattens_handler_wait_and_raw_close_leaves(self) -> None:
         server = mock.Mock()
@@ -3715,6 +1040,7 @@ window.addEventListener('load', async () => {
             )
         )
 
+
     def test_captured_server_close_retains_each_active_socket_failure_leaf(self) -> None:
         shutdown_failure = mock.Mock()
         shutdown_failure.shutdown.side_effect = OSError(errno.EIO, "socket shutdown leaf failure")
@@ -3742,6 +1068,7 @@ window.addEventListener('load', async () => {
             "close",
             descriptions_by_error["[Errno 5] socket close leaf failure"],
         )
+
 
     def test_captured_server_context_flattens_active_socket_failure_leaves(self) -> None:
         shutdown_failure = mock.Mock()
@@ -3777,6 +1104,7 @@ window.addEventListener('load', async () => {
             )
         )
 
+
     def test_captured_server_context_manager_closes_server(self) -> None:
         server = mock.Mock()
         thread = mock.Mock()
@@ -3790,6 +1118,7 @@ window.addEventListener('load', async () => {
         thread.join.assert_called_once_with(timeout=5)
         server.close_active_request_connections.assert_called_once()
         server.server_close.assert_called_once()
+
 
     def test_captured_server_startup_failure_closes_constructed_listener(self) -> None:
         constructed_servers: list[Any] = []
@@ -3812,6 +1141,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(str(raised.exception.__cause__), "intentional startup failure")
         self.assertEqual(len(constructed_servers), 1)
         self.assertEqual(constructed_servers[0].socket.fileno(), -1)
+
 
     def test_captured_server_abort_closes_listener_after_late_registration(self) -> None:
         constructed_servers: list[Any] = []
@@ -3848,6 +1178,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(len(construction_threads), 1)
         self.assertFalse(construction_threads[0].is_alive())
 
+
     def test_captured_server_startup_failure_closes_two_bound_listeners_in_reverse_order(self) -> None:
         constructed_servers: list[Any] = []
         close_order: list[Any] = []
@@ -3881,6 +1212,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(len(constructed_servers), 2)
         self.assertEqual(close_order, list(reversed(constructed_servers)))
         self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
+
 
     def test_captured_server_abort_closes_late_listener_after_registration_is_abandoned(self) -> None:
         constructed_servers: list[Any] = []
@@ -3921,6 +1253,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(len(constructed_servers), 2)
         self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
 
+
     def test_captured_listener_registry_claims_late_listener_before_concurrent_pre_join_drain(self) -> None:
         registry = _CapturedListenerRegistry(threading.Event())
         listener = mock.Mock(server_address=("127.0.0.1", 12345), serve_forever_started=None)
@@ -3953,6 +1286,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(direct_close_errors, [])
         raw_server_close.assert_called_once_with(listener)
         self.assertEqual(registry.snapshot(), ())
+
 
     def test_captured_server_abort_retries_late_listener_after_early_close_failure(self) -> None:
         constructed_servers: list[Any] = []
@@ -4028,6 +1362,7 @@ window.addEventListener('load', async () => {
             ],
         )
 
+
     def test_captured_server_abort_retries_registered_listener_after_pre_join_failure(self) -> None:
         constructed_servers: list[Any] = []
         construction_threads: list[threading.Thread] = []
@@ -4089,6 +1424,7 @@ window.addEventListener('load', async () => {
             )
         )
 
+
     def test_captured_server_successfully_owns_all_listeners_and_uses_serving_port(self) -> None:
         constructed_servers: list[Any] = []
         close_order: list[Any] = []
@@ -4138,6 +1474,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(close_order, list(reversed(constructed_servers)))
         self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
 
+
     def test_captured_server_context_preserves_primary_failure_when_cleanup_fails(self) -> None:
         server = mock.Mock()
         server.request_handlers_idle.wait.return_value = True
@@ -4151,6 +1488,7 @@ window.addEventListener('load', async () => {
                 self.fail("original test failure")
 
         self.assertTrue(any("Cleanup also failed" in note for note in getattr(raised.exception, "__notes__", ())))
+
 
     def test_captured_server_context_flattens_nested_cleanup_failures(self) -> None:
         server = mock.Mock()
@@ -4182,6 +1520,7 @@ window.addEventListener('load', async () => {
             )
         )
 
+
     def test_cleanup_scope_preserves_primary_failure_and_all_cleanup_failure_details(self) -> None:
         def fail_first_cleanup() -> None:
             raise RuntimeError("first cleanup failure")
@@ -4199,6 +1538,7 @@ window.addEventListener('load', async () => {
         notes = getattr(raised.exception, "__notes__", ())
         self.assertTrue(any("second cleanup action" in note and "ValueError('second cleanup failure')" in note for note in notes))
         self.assertTrue(any("first cleanup action" in note and "RuntimeError('first cleanup failure')" in note for note in notes))
+
 
     def test_cleanup_scope_raises_all_nested_leaf_records_without_primary_error(self) -> None:
         def fail_nested_first_cleanup() -> None:
@@ -4224,6 +1564,7 @@ window.addEventListener('load', async () => {
             ],
         )
 
+
     def test_job_runner_tracker_preserves_primary_failure_when_join_fails(self) -> None:
         stuck_thread = mock.Mock()
         stuck_thread.is_alive.return_value = True
@@ -4236,6 +1577,7 @@ window.addEventListener('load', async () => {
         stuck_thread.join.assert_called_once_with(timeout=2)
         self.assertTrue(any("Cleanup also failed" in note for note in getattr(raised.exception, "__notes__", ())))
 
+
     def test_job_runner_tracker_raises_join_failure_without_primary_error(self) -> None:
         stuck_thread = mock.Mock()
         stuck_thread.is_alive.return_value = True
@@ -4243,6 +1585,7 @@ window.addEventListener('load', async () => {
         with self.assertRaisesRegex(AssertionError, "JobRunner worker thread did not stop"):
             with _JobRunnerThreadTracker() as tracker:
                 tracker._register(stuck_thread)
+
 
     def test_job_runner_tracker_joins_worker_registered_during_cleanup(self) -> None:
         worker_finished = threading.Event()
@@ -4261,69 +1604,6 @@ window.addEventListener('load', async () => {
         self.assertEqual(len(late_worker), 1)
         self.assertFalse(late_worker[0].is_alive())
 
-    def test_core_and_web_events_have_separate_payloads_and_cursors(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with web_app._EVENT_CURSOR_LOCK:
-                web_app._EVENT_CURSOR_STATE.clear()
-
-            core_events = web_app._events_response_payload(config, {}, stream="core")
-            web_events = web_app._events_response_payload(config, {}, stream="web")
-
-            core_types = {event["type"] for event in core_events["events"]}
-            web_types = {event["type"] for event in web_events["events"]}
-            self.assertIn("core.status", core_types)
-            self.assertIn("strategy-discovery.progress", core_types)
-            self.assertIn("strategy-candidates", core_types)
-            self.assertNotIn("status", core_types)
-            self.assertIn("status", web_types)
-            self.assertIn("runs", web_types)
-            self.assertIn("candidates", web_types)
-            self.assertNotIn("core.status", web_types)
-            self.assertTrue(all(str(event["event_id"]).startswith("core:") for event in core_events["events"]))
-            self.assertTrue(all(str(event["event_id"]).startswith("web:") for event in web_events["events"]))
-
-            unchanged = web_app._events_response_payload(
-                config,
-                {"after_id": [str(core_events["next_after_id"])]},
-                stream="core",
-            )
-            self.assertEqual([], unchanged["events"])
-            self.assertEqual(core_events["next_after_id"], unchanged["next_after_id"])
-
-            web_app.save_run_settings(config, {"curl_parallelism_default": 17})
-            changed = web_app._events_response_payload(
-                config,
-                {"after_id": [str(core_events["next_after_id"])]},
-                stream="core",
-            )
-
-            self.assertEqual(["run-settings"], [event["type"] for event in changed["events"]])
-            self.assertTrue(str(changed["events"][0]["event_id"]).startswith("core:"))
-
-            upsert_candidates(
-                config.output.state_dir,
-                {
-                    "candidates": [
-                        {
-                            "protocol": "tcp",
-                            "args": "--dpi-desync=fake",
-                            "domain": "youtube.com",
-                            "test": "https",
-                            "ip_version": "4",
-                        }
-                    ],
-                    "common_candidates": [],
-                },
-                {"id": "run_1"},
-            )
-            candidate_changed = web_app._events_response_payload(
-                config,
-                {"after_id": [str(changed["next_after_id"])]},
-                stream="core",
-            )
-
-            self.assertEqual(["strategy-candidates"], [event["type"] for event in candidate_changed["events"]])
 
     def test_split_settings_endpoints_save_runtime_defaults(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -4370,6 +1650,7 @@ window.addEventListener('load', async () => {
             self.assertNotIn("update_channel", stored)
             self.assertEqual(legacy["curl_parallelism_max"], 25)
 
+
     def test_read_settings_migrates_legacy_state_settings_to_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state_dir = Path(raw) / "state"
@@ -4393,6 +1674,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(service_stored["update_channel"], "prerelease")
             self.assertIn("settings", read_state(state_dir))
 
+
     def test_core_run_settings_save_ignores_service_settings(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
@@ -4413,24 +1695,22 @@ window.addEventListener('load', async () => {
             self.assertEqual(legacy["curl_parallelism_max"], 44)
             self.assertEqual(legacy["update_channel"], "stable")
 
+
     def test_resource_budget_constants_are_wired_to_runtime_limits(self) -> None:
         from gp_control_plane import backups as backup_module
         from gp_control_plane import resource_budget
-        from gp_control_plane.web import proxy as proxy_module
 
         self.assertEqual(web_app.MAX_BACKUP_UPLOAD_BYTES, resource_budget.BACKUP_UPLOAD_MAX_BYTES)
         self.assertEqual(web_app.MAX_JSON_REQUEST_BYTES, resource_budget.JSON_REQUEST_MAX_BYTES)
-        self.assertEqual(proxy_module.JSON_REQUEST_MAX_BYTES, resource_budget.JSON_REQUEST_MAX_BYTES)
-        self.assertEqual(proxy_module.BACKUP_UPLOAD_MAX_BYTES, resource_budget.BACKUP_UPLOAD_MAX_BYTES)
         self.assertEqual(resource_budget.JSON_REQUEST_MAX_BYTES, 1 * 1024 * 1024)
         self.assertEqual(resource_budget.BACKUP_UPLOAD_MAX_BYTES, 64 * 1024 * 1024)
         self.assertEqual(backup_module.BACKUP_STREAM_CHUNK_BYTES, resource_budget.BACKUP_STREAM_CHUNK_BYTES)
-        self.assertEqual(proxy_module.PROXY_STREAM_CHUNK_BYTES, resource_budget.PROXY_STREAM_CHUNK_BYTES)
         self.assertEqual(
             web_app.DEFAULT_SETTINGS["curl_parallelism_max"],
             resource_budget.RASPBERRY_PI2_CURL_PARALLELISM_SAFE_MAX,
         )
         self.assertFalse(resource_budget.DIAGNOSTICS_INCLUDE_HOST_METRICS)
+
 
     def test_standard_discovery_job_uses_launch_timeout_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -4450,6 +1730,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(7, runner.call_args.kwargs["curl_max_time"])
             self.assertEqual(8, runner.call_args.kwargs["curl_max_time_quic"])
             self.assertEqual(9, runner.call_args.kwargs["curl_max_time_doh"])
+
 
     def test_multi_domain_discovery_job_uses_launch_timeout_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -4471,6 +1752,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(12, runner.call_args.kwargs["curl_max_time_quic"])
             self.assertEqual(13, runner.call_args.kwargs["curl_max_time_doh"])
             self.assertEqual(2, runner.call_args.kwargs["curl_parallelism"])
+
 
     def test_core_strategy_discovery_start_run_routes_swagger_payload(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -4546,6 +1828,7 @@ window.addEventListener('load', async () => {
                     self.assertTrue(runner.call_args.kwargs["enable_tls12"])
                     self.assertEqual(runner_threads.tracked_count, 1)
                     self.assertTrue(snapshot_finished.is_set())
+
 
     def test_strategy_discovery_start_installs_one_time_runtime_cleanup_hook(self) -> None:
         def run_cancel_hook_regression(mode: str) -> None:
@@ -4658,6 +1941,7 @@ window.addEventListener('load', async () => {
         for mode in ("standard", "multi_domain"):
             with self.subTest(mode=mode):
                 run_cancel_hook_regression(mode)
+
 
     def test_strategy_discovery_immediate_stop_finishes_without_privileged_child(self) -> None:
         def run_immediate_stop(mode: str) -> None:
@@ -4786,6 +2070,7 @@ window.addEventListener('load', async () => {
             with self.subTest(mode=mode):
                 run_immediate_stop(mode)
 
+
     def test_strategy_discovery_stop_during_root_command_finishes_without_privileged_child(self) -> None:
         def run_stop_during_root_command(mode: str) -> None:
             with tempfile.TemporaryDirectory() as raw:
@@ -4911,6 +2196,7 @@ window.addEventListener('load', async () => {
         for mode in ("standard", "multi_domain"):
             with self.subTest(mode=mode):
                 run_stop_during_root_command(mode)
+
 
     def test_strategy_discovery_stop_after_precheck_before_popen_finishes_stopped(self) -> None:
         def run_stop_after_precheck_before_popen(mode: str) -> None:
@@ -5063,6 +2349,7 @@ window.addEventListener('load', async () => {
             with self.subTest(mode=mode):
                 run_stop_after_precheck_before_popen(mode)
 
+
     def test_strategy_discovery_without_stop_reaches_actual_privileged_child(self) -> None:
         def run_without_stop(mode: str) -> None:
             blockcheck_path = str(Path("/test/blockcheck2.sh").resolve())
@@ -5153,6 +2440,7 @@ window.addEventListener('load', async () => {
         for mode in ("standard", "multi_domain"):
             with self.subTest(mode=mode):
                 run_without_stop(mode)
+
 
     def test_strategy_discovery_stop_after_actual_child_launch_terminates_and_cleans_up(self) -> None:
         def run_stop_after_launch(mode: str) -> None:
@@ -5282,6 +2570,7 @@ window.addEventListener('load', async () => {
             with self.subTest(mode=mode):
                 run_stop_after_launch(mode)
 
+
     def test_core_strategy_discovery_start_run_rejects_unknown_protocols(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported protocols"):
             web_app._core_strategy_discovery_job_payload(
@@ -5291,6 +2580,7 @@ window.addEventListener('load', async () => {
                     "protocols": ["tcp", "bad"],
                 }
             )
+
 
     def test_core_strategy_discovery_start_run_quic_only_disables_tcp_protocols(self) -> None:
         job_name, job_payload = web_app._core_strategy_discovery_job_payload(
@@ -5314,6 +2604,7 @@ window.addEventListener('load', async () => {
         self.assertEqual(7, job_payload["curl_max_time_quic"])
         self.assertFalse(job_payload["enable_ipv6"])
 
+
     def test_core_strategy_discovery_start_run_rejects_empty_domain_list(self) -> None:
         with self.assertRaisesRegex(ValueError, "domains are required"):
             web_app._core_strategy_discovery_job_payload(
@@ -5323,6 +2614,7 @@ window.addEventListener('load', async () => {
                     "protocols": ["tcp"],
                 }
             )
+
 
     def test_core_strategy_discovery_start_run_rejects_unknown_top_level_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported start-run fields: mode_settings"):
@@ -5334,6 +2626,7 @@ window.addEventListener('load', async () => {
                 }
             )
 
+
     def test_core_strategy_discovery_start_run_rejects_unknown_settings_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported start-run settings: mode_settings"):
             web_app._core_strategy_discovery_job_payload(
@@ -5343,6 +2636,7 @@ window.addEventListener('load', async () => {
                     "settings": {"mode_settings": {"common_strategy_min_domains": 2}},
                 }
             )
+
 
     def test_core_strategy_candidates_require_filter_and_export_streams_full_facts(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -5379,6 +2673,7 @@ window.addEventListener('load', async () => {
             self.assertIn("protocol", payload["candidates"][0])
             self.assertIn("seen", payload["candidates"][0])
 
+
     def test_service_status_reports_installation_shape_without_web_unit_hardcode(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
@@ -5399,6 +2694,7 @@ window.addEventListener('load', async () => {
             self.assertIsInstance(payload["data_state"], dict)
             self.assertIn("v2fly", payload["data_state"])
 
+
     def test_service_status_reports_missing_v2fly_as_data_state_not_runtime_failure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
@@ -5418,6 +2714,7 @@ window.addEventListener('load', async () => {
             self.assertEqual(payload["data_state"]["state"], "missing")
             self.assertEqual(payload["data_state"]["v2fly"]["state"], "missing")
             self.assertEqual(payload["data_state"]["v2fly"]["group_count"], 0)
+
 
     def test_service_install_identity_environment_overrides_restored_settings(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -5463,6 +2760,7 @@ window.addEventListener('load', async () => {
             self.assertEqual("v0.4.0", fallback_available["current"]["installed_ref"])
             self.assertEqual("", fallback_available["current"]["commit"])
 
+
     def test_run_preferences_endpoint_saves_last_finder_form(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
@@ -5498,7 +2796,7 @@ window.addEventListener('load', async () => {
                     }
                 }
             )
-            connection.request("POST", "/api/web/run-preferences", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
+            connection.request("POST", "/api/internal/web-views/run-preferences", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
             response = connection.getresponse()
             saved = response.read().decode("utf-8")
             connection.close()
@@ -5511,7 +2809,7 @@ window.addEventListener('load', async () => {
             self.assertNotIn('"settings_preset"', saved)
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            connection.request("GET", "/api/web/run-preferences", headers=_authenticated_headers(port))
+            connection.request("GET", "/api/internal/web-views/run-preferences", headers=_authenticated_headers(port))
             response = connection.getresponse()
             status = response.read().decode("utf-8")
             connection.close()
@@ -5521,6 +2819,7 @@ window.addEventListener('load', async () => {
             self.assertIn('"youtube.com"', status)
             self.assertIn('"discord.com"', status)
             self.assertNotIn('"settings_preset"', status)
+
 
     def test_web_preset_domain_endpoints_save_and_page_domains(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -5534,7 +2833,7 @@ window.addEventListener('load', async () => {
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             body = json.dumps({"scope": "finder", "name": "mine", "domains": ["youtube.com", "discord.com", "discordcdn.com"]})
-            connection.request("POST", "/api/web/presets/save", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
+            connection.request("POST", "/api/internal/web-views/preset-save", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
             response = connection.getresponse()
             saved = response.read().decode("utf-8")
             connection.close()
@@ -5542,13 +2841,14 @@ window.addEventListener('load', async () => {
             self.assertIn('"mine"', saved)
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            connection.request("GET", "/api/web/presets/domains?scope=finder&name=mine&limit=2", headers=_authenticated_headers(port))
+            connection.request("GET", "/api/internal/web-views/preset-domains?scope=finder&name=mine&limit=2", headers=_authenticated_headers(port))
             response = connection.getresponse()
             page = response.read().decode("utf-8")
             connection.close()
             self.assertEqual(response.status, 200)
             self.assertIn('"total":3', page)
             self.assertIn('"has_more":true', page)
+
 
     def test_system_preset_api_allows_empty_save_and_user_only_delete(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -5562,7 +2862,7 @@ window.addEventListener('load', async () => {
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             body = json.dumps({"scope": "finder", "name": "required", "kind": "system", "domains": []})
-            connection.request("POST", "/api/web/presets/save", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
+            connection.request("POST", "/api/internal/web-views/preset-save", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
             response = connection.getresponse()
             saved = response.read().decode("utf-8")
             connection.close()
@@ -5574,7 +2874,7 @@ window.addEventListener('load', async () => {
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             body = json.dumps({"scope": "finder", "name": "mine", "domains": ["youtube.com"]})
-            connection.request("POST", "/api/web/presets/save", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
+            connection.request("POST", "/api/internal/web-views/preset-save", body=body, headers=_authenticated_headers(port, {"Content-Type": "application/json"}))
             response = connection.getresponse()
             response.read()
             connection.close()
@@ -5584,7 +2884,7 @@ window.addEventListener('load', async () => {
             body = json.dumps({"scope": "finder", "names": ["mine", "required"]})
             connection.request(
                 "POST",
-                "/api/web/presets/delete-user-lists",
+                "/api/internal/web-views/preset-delete-user-lists",
                 body=body,
                 headers=_authenticated_headers(port, {"Content-Type": "application/json"}),
             )
@@ -5596,6 +2896,7 @@ window.addEventListener('load', async () => {
             self.assertNotIn('"mine"', deleted)
             self.assertIn('"required":[]', deleted)
             self.assertIn('"kind":"system"', deleted)
+
 
     def test_discovery_profiles_endpoint_is_removed(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -5638,6 +2939,7 @@ window.addEventListener('load', async () => {
             self.assertIn(response.status, {404, 405})
             self.assertNotIn('"night-test"', saved)
             self.assertNotIn("Changed built-in", saved)
+
 
 
 class _CleanupFailureRecords(AssertionError):
@@ -6039,37 +3341,9 @@ def _start_captured_server(
     **kwargs: Any,
 ) -> _CapturedTestServer:
     module = sys.modules[function.__module__]
-    if function.__name__ == "serve_web_proxy" and "core_url" in kwargs:
-        # A5 moves the Web listener to Cheroot.  Keep this legacy test helper
-        # focused on its behavioral assertions while starting the real public
-        # runtime rather than recreating a BaseHTTP test stack.
-        from gp_control_plane.web.proxy import create_web_runtime
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            port = int(reservation.getsockname()[1])
-        runtime = create_web_runtime(config, "127.0.0.1", port, **kwargs)
-        thread = threading.Thread(target=runtime.serve_forever, daemon=True)
-        thread.start()
-        captured = _CapturedTestServer(port, runtime, thread)
-        try:
-            deadline = time.monotonic() + _startup_timeout
-            while True:
-                try:
-                    with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                        break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise AssertionError(f"Cheroot Web listener did not start on port {port}")
-                    time.sleep(0.01)
-        except BaseException:
-            captured.close()
-            raise
-        return captured
-
     if function.__name__ in {"serve", "serve_core"} and function.__module__ in {
-        "gp_control_plane.web.api_server",
-        "gp_control_plane.web.core_server",
+        "gp_control_plane.http.api_server",
+        "gp_control_plane.http.core_server",
     }:
         # A6 moves the Core listener onto the same explicit Cheroot runtime as
         # Web.  This test-only lifecycle owner exercises the real public Core
@@ -6083,7 +3357,7 @@ def _start_captured_server(
             config,
             "127.0.0.1",
             port,
-            ui_enabled=bool(kwargs.get("ui_enabled", function.__name__ == "serve")),
+            ui_enabled=False,
         )
         thread = threading.Thread(target=runtime.serve_forever, daemon=True)
         thread.start()
@@ -6106,7 +3380,7 @@ def _start_captured_server(
     server_type = _server_type or getattr(module, "ThreadingHTTPServer")
     server_modules = (
         module,
-        importlib.import_module("gp_control_plane.web.api_server"),
+        importlib.import_module("gp_control_plane.http.api_server"),
     )
     startup_abandoned = threading.Event()
     listeners = _CapturedListenerRegistry(startup_abandoned)

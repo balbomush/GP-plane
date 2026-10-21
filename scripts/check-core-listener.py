@@ -15,6 +15,10 @@ import subprocess
 
 def check(install_dir: Path, install_user: str) -> None:
     with socket.socket() as probe:
+        # Match Cheroot's reuse policy: a closed listener can leave TIME_WAIT
+        # connections without owning the port. A live listener still rejects
+        # this bind and must pass the managed-process checks below.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(('127.0.0.1', 8081))
         except OSError:

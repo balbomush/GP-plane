@@ -50,6 +50,11 @@ if [ -e "$install_dir" ] || [ -L "$install_dir" ]; then
 fi
 vault_tool="$SOURCE_DIR/scripts/clean-install-vault.py"
 [ -f "$vault_tool" ] && [ ! -L "$vault_tool" ] || fail 'exact tag lacks the vault tool'
+if [ "$INITIAL_INSTALL" = on ]; then
+  for existing_state in "$state_parent" "$install_dir/build/state"; do
+    [ ! -e "$existing_state" ] && [ ! -L "$existing_state" ] || fail 'initial install cannot discard existing data; prepare a vault and use the restore path'
+  done
+fi
 # This executes as the install user; root neither reads nor deletes the vault/handoff.
 if [ "$INITIAL_INSTALL" = off ]; then
   runuser -u "$INSTALL_USER" -- python3 "$vault_tool" --verify --home "$target_home" >/dev/null || fail 'vault is absent or corrupt; nothing was removed'
@@ -99,6 +104,15 @@ else
 fi
 runuser -u "$INSTALL_USER" -- python3 "$SOURCE_DIR/scripts/prepare-zapret2.py" --probe --destination "$zapret_dir"
 python3 "$SOURCE_DIR/scripts/check-core-listener.py" --install-dir "$install_dir" --install-user "$INSTALL_USER"
+# The independent Web is never stopped or removed by Core. Reject an unsupported
+# installed consumer before activation, running its code only as its own user.
+web_root="$gp_root/GP-plane-web"
+if [ -e "$web_root" ] || [ -L "$web_root" ]; then
+  [ -d "$web_root" ] && [ ! -L "$web_root" ] && [ "$(readlink -f -- "$web_root")" = "$web_root" ] || fail 'unsafe independent Web root; nothing stopped'
+  [ -f "$web_root/.gp-web-owned" ] && [ ! -L "$web_root/.gp-web-owned" ] && [ "$(cat "$web_root/.gp-web-owned")" = 'GP Plane Web' ] || fail 'foreign independent Web root; nothing stopped'
+  runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -I -c 'from gp_control_plane.http.docs import openapi_json_bytes; print(openapi_json_bytes().decode("utf-8"))' |
+    runuser -u "$INSTALL_USER" -- "$web_root/.venv/bin/python" -I -c 'import json,sys; from gp_control_plane_web.compatibility import validate_core_contract; validate_core_contract(json.load(sys.stdin))' || fail 'installed Web does not support prepared Core; nothing stopped'
+fi
 phase=activation
 stop_unit() {
   local state

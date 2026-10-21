@@ -13,7 +13,7 @@ from typing import Any
 
 _REPOSITORY = Path(__file__).resolve().parents[2]
 _WORKSPACE = _REPOSITORY.parents[1]
-_LEDGER = _WORKSPACE / "release-ledger" / "attempts" / "v0.4.1"
+_LEDGER = Path(os.environ["GP_BROWSER_ARTIFACTS"]) if os.environ.get("GP_BROWSER_ARTIFACTS") else _WORKSPACE / "release-ledger" / "attempts" / "v0.4.1"
 _LOCK_PATH = Path(__file__).with_name("toolchain.lock.json")
 
 

@@ -1,179 +1,129 @@
-# GP Access Control Plane
+# GP Plane Core
 
-GP Access Control Plane - управляющий контур для Linux-хоста, который подбирает рабочие стратегии `zapret2` через `blockcheck2.sh` и дает локальную web panel для оператора.
+GP Plane Core — самостоятельный управляющий контур Linux для поиска стратегий
+zapret2. Core владеет auth, данными, заданиями, vault и запуском через root-helper.
+Web устанавливается отдельно и обращается к Core по HTTP.
 
-`Control plane` здесь означает отдельный управляющий слой: GP собирает данные, запускает проверки и хранит результаты, а пользовательский трафик остается в `data plane` на роутере или другом целевом устройстве.
+Это feature-срез разделения после v0.4.4. Новый стабильный выпуск ещё не опубликован.
+История, теги и выпуски прежнего GP сохранены в том же репозитории
+[balbomush/GP-plane](https://github.com/balbomush/GP-plane).
+Опубликованный v0.4.4 — прежний монолит; его артефакты не заменяются этим срезом.
 
-## Установка
+## Самостоятельная сборка
 
-### 1. Обновите систему
-
-Перед первой установкой на чистую систему лучше отдельно обновить пакеты и перезагрузить хост:
-
-```bash
-sudo apt update
-sudo apt upgrade -y
-sudo reboot
-```
-
-На уже настроенной системе этот шаг остается вашим решением. Установщик GP не делает полный `apt upgrade` сам.
-
-### 2. Запустите установщик
-
-Обычная установка с Core service и Web UI:
+Python >=3.11, Bottle 0.13.4, Cheroot 11.1.2. Node и пакет Web не нужны.
 
 ```bash
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
-curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 bash
+python3 -m venv .venv
+.venv/bin/python -m pip install 'setuptools==84.0.0' build
+.venv/bin/python -m build --no-isolation
+python3 -m venv /tmp/gp-core-check
+/tmp/gp-core-check/bin/python -m pip install --no-index --find-links /path/to/wheelhouse dist/*.whl
+cd /tmp
+/tmp/gp-core-check/bin/gp-control-plane --state-dir /tmp/gp-core-state core --host 127.0.0.1 --port 8081
 ```
 
-Headless-установка без штатного Web UI:
+Для qualification используйте отдельные каталоги и точные wheel/checksum; `/tmp`
+в примере не является штатным хранилищем. Продуктовые зависимости — в
+`requirements-runtime.lock`. Собственные Core tests и интеграционные проверки
+разделены по ответственности; [HTTP/runtime](docs/headless-runtime-core-api.md).
+
+Собственный набор: `python -m unittest discover -s tests`. Linux shell/socket,
+symlink и аппаратные сценарии проверяются на Linux, отдельно от Windows.
+[Карта владельцев](tests/OWNERSHIP.md) описывает перенос прежних смешанных тестов.
+Общий artifact runner запускается Core-only интерпретатором:
 
 ```bash
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
-curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 GP_INSTALL_WEB=off bash
+/path/to/core-venv/bin/python tests/qualify_pair.py \
+  --web-python /path/to/web-venv/bin/python --web-tests /path/to/web-source/tests \
+  --core-wheel /path/to/core.whl --web-wheel /path/to/web.whl \
+  --output /path/to/evidence/pair.json
 ```
 
-### Alpha/prerelease (только для тестовой обратной связи)
+Runner проверяет отдельные установленные пакеты и их точное совпадение с wheel;
+отсутствующий артефакт не считается успешным skip. Browser/toolchain и real engine
+имеют отдельные gates. Тестовые данные и результаты храните вне checkout.
 
-Основные команды устанавливают стабильный выпуск. Если опубликована отдельная
-alpha-сборка, её точный тег и команду установки берите из описания этого prerelease.
-Номер стабильной версии не означает, что для неё существует alpha-сборка.
+## Core-only установка и обновление
 
-Переход alpha → stable и rollback не поддерживаются: alpha — самостоятельная
-тестовая clean-install сборка, а не этап обновления stable-установки.
+При переходе с v0.4.4 прежняя панель отключается. До activation подготавливаются
+закреплённый zapret2, Python runtime и recoverable vault; ошибка подготовки
+сохраняет старые службы и данные. Во время activation сначала останавливаются
+legacy Core/Web, затем заменяются файлы. Vault восстанавливается install user
+до запуска служб; при ошибке restore сохранённый vault остаётся для recovery.
+Откат на старый бинарник поверх восстановленных данных не поддерживается.
 
-Укажите exact annotated stable tag `vX.Y.Z` или alpha tag `vX.Y.Z-alpha.N` в `GP_BRANCH`. При живом состоянии v0.4 bootstrap сначала валидирует ровно один допустимый source и создаёт fresh device-local vault; найденный pending vault при всё ещё живом source останавливает путь до `sudo`, чтобы не восстановить устаревшие данные. На хосте без source состояния bootstrap использует проверенный pending vault для повтора после уже начатой clean-install, а при отсутствии обоих выполняет non-destructive initial install без vault. Затем один штатный installer-process сначала скачивает и проверяет закреплённый release zapret2 v1.0.5.2 (SHA-256 архива, безопасная распаковка, архитектура, исполнимые binaries и Lua), собирает и проверяет Python-пакет GP. Только после успешной подготовки останавливает сервисы, удаляет только прежнюю GP-поверхность и ставит fresh версию из того же tag. При existing installation после fresh-файлов и venv installer автоматически восстанавливает vault как install user и запускает сервисы только после semantic- и SQLite-проверок; исходный vault удаляется только при успешном restore. При сбое vault до удаления ничего не меняется, а после удаления сохранённый vault остаётся для повторной clean-install или аварийного restore. Откат не поддерживается.
+После публикации точного annotated stable/alpha tag bootstrap запускается как
+install user, с `GP_BRANCH=<точный-тег>` и `GP_INSTALL_WEB=off`. Берите URL
+bootstrap из описания этого выпуска; не подставляйте v0.4.4 для установки данного
+кандидата. Alpha → stable требует отдельной clean-install от стабильного source.
 
-Установка проверяется на Debian/Ubuntu-like системах с `apt-get` и `systemd`.
-
-После установки откройте:
-
-```text
-http://<ip-board>:8080/
-```
-
-API-контракт доступен здесь:
-
-- Swagger UI: `http://<ip-board>:8080/swagger`;
-- raw OpenAPI JSON: `http://<ip-board>:8080/openapi.json`.
-
-В headless-only режиме эти маршруты доступны на локальном Core API: `http://127.0.0.1:8081/swagger` и `http://127.0.0.1:8081/openapi.json`. Web/monolith OpenAPI показывает полный контракт, а headless Core OpenAPI показывает только callable Core/Service/OpenAPI операции.
-
-### Безопасность и вход
-
-GP Control Plane v0.4.4 рассчитан на доверенную локальную сеть. Веб-интерфейс
-слушает адрес платы на порту `8080`, а при первом запуске намеренно использует
-учётные данные `admin` / `admin`. Это не способ безопасно публиковать сервис в
-интернете или в недоверенной общей сети: не открывайте этот порт наружу и не
-размещайте плату в такой сети.
-
-Если состав или доверенность локальной сети меняются, сразу смените пароль.
-Начальные учётные данные известны всем, кто читает эту документацию.
-
-`POST /api/auth/login` выдает Bearer-токен сроком на 24 часа. Например:
+Для локально квалифицированного clean candidate checkout предусмотрен тот же
+installer с полной идентичностью commit, а не moving branch:
 
 ```bash
-curl -X POST "$BASE_URL/api/auth/login" \
-  -H "Content-Type: application/json" \
+sudo bash scripts/install-linux.sh --source-dir "$PWD" --install-user "$USER" \
+  --candidate-sha "$(git rev-parse HEAD)" --web off --initial-install on
+```
+
+`--initial-install on` применяется только на чистом install root без существующих
+данных; для обновления нужен предварительно подготовленный vault и `off`.
+Обычный опубликованный bootstrap сам проверяет единственный поддержанный source,
+создаёт fresh vault до sudo и выбирает режим; ручной restore — аварийный путь.
+Полный apt upgrade и reboot установщик не выполняет.
+
+Core paths сохраняются: `~/gp/GP-access-control-plane`,
+`~/gp/.GP-access-control-plane.data/state`,
+`~/gp/.GP-access-control-plane.data/backups`, `gp-control-plane-core.service`.
+Core слушает только `127.0.0.1:8081`. Новый отдельный Web находится в
+`~/gp/GP-plane-web` и использует `gp-web.service` / `/etc/default/gp-web`.
+Core update его не останавливает и не удаляет; несовместимость определяется до
+activation. Legacy `gp-control-plane-web.service` к новому Web не относится.
+
+## Первый вход без Web
+
+Core API/Swagger: `http://127.0.0.1:8081/openapi.json` и `/swagger`.
+Начальные учётные данные `admin` / `admin` смените через существующий API.
+Bearer живёт 24 часа; смена пароля отзывает прежние токены.
+
+```bash
+BASE_URL=http://127.0.0.1:8081
+curl -fsS "$BASE_URL/api/health"
+curl -fsS -X POST "$BASE_URL/api/auth/login" -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}'
 ```
 
-Сохраните значение `access_token` из ответа и передайте его при смене пароля:
+Передайте полученный `access_token` в заголовке, без токена в URL:
 
 ```bash
-curl -X POST "$BASE_URL/api/auth/change-password" \
-  -H "Authorization: Bearer <access_token>" \
-  -H "Content-Type: application/json" \
+curl -fsS -X POST "$BASE_URL/api/auth/change-password" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"current_password":"admin","new_password":"новый-надежный-пароль"}'
 ```
 
-Среди API без токена доступны только `GET /api/health` и `POST /api/auth/login`; для всех остальных API-операций требуется заголовок `Authorization: Bearer <access_token>`.
-
-Swagger UI и raw OpenAPI можно открыть без токена. Чтобы выполнить защищенный метод через **Try it out**, сначала укажите Bearer-токен через кнопку **Authorize** в Swagger UI.
-
-### Параметры Установки
-
-Поддерживаются только topology-параметры, переданные в окружении bootstrap:
+После смены пароля войдите снова. Подготовка vault также доступна без Web:
 
 ```bash
-cat > gp-install.env <<'EOF'
-GP_INSTALL_WEB=on
-EOF
-
-set -a; . ./gp-install.env; set +a
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
-curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 bash
+curl -fsS -X POST "$BASE_URL/api/core/clean-install-vaults/create" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}'
 ```
 
-Проект ставится в `~/gp/GP-access-control-plane`; clean-install не принимает внешний путь состояния. Для новой рабочей установки постоянные данные хранятся рядом с каталогом проекта: состояние — в `~/gp/.GP-access-control-plane.data/state`, файловые бекапы — в `~/gp/.GP-access-control-plane.data/backups`.
+Эта операция сохраняет device-local vault, не выгружает секреты в браузер.
+Installer проверяет pending vault и восстанавливает данные штатным путём.
 
-Маршрут миграции v0.4.0 поддерживает один из двух стандартных путей: `$HOME/gp/GP-access-control-plane/build/state` или `$HOME/gp/.GP-access-control-plane.data/state`. При наличии обоих bootstrap останавливается до `sudo`; настроенный или внешний путь состояния не входит в scope этой миграции.
-
-Топология выбирается только перед запуском: `GP_INSTALL_WEB=on` ставит Core и Web, `off` — только Core. Штатная clean-install для existing installation восстанавливает vault автоматически до запуска сервисов; источник удаляется только после semantic-проверки и готовности/integrity SQLite. Ручной restore через аутентифицированный HTTP/API остаётся аварийным путём для сохранённого pending vault, а не шагом обычной установки.
-
-Что делает установщик:
-
-- ставит нужные пакеты через `apt-get install`;
-- подготавливает закреплённый `zapret2` в `/opt/gp-zapret2/v1.0.5.2-<архитектура>`, сохраняя существующий `/opt/zapret2`;
-- скачивает GP и создает Python-окружение;
-- устанавливает команду `gp-control-plane`;
-- ставит root-helper для запуска `blockcheck2` без интерактивного sudo-пароля;
-- создает и запускает systemd-сервисы.
-
-## Проверки После Установки
-
-Проверить root-helper и `zapret2`:
+## Служба и отдельный Web
 
 ```bash
 gp-control-plane zapret2 check-install
-```
-
-В выводе должны быть `root_helper_found: true` и `root_helper_ready: true`.
-
-Проверить Web UI:
-
-```bash
-curl -I http://127.0.0.1:8080/
-```
-
-Проверить сервисы:
-
-```bash
 sudo systemctl status gp-control-plane-core.service
-sudo systemctl status gp-control-plane-web.service
+journalctl -u gp-control-plane-core.service -f
 ```
 
-## Управление Сервисом
-
-Старт:
-
-```bash
-sudo systemctl start gp-control-plane-core.service
-sudo systemctl start gp-control-plane-web.service
-```
-
-Перезапуск:
-
-```bash
-sudo systemctl restart gp-control-plane-core.service
-sudo systemctl restart gp-control-plane-web.service
-```
-
-Остановка:
-
-```bash
-sudo systemctl stop gp-control-plane-web.service
-sudo systemctl stop gp-control-plane-core.service
-```
-
-Логи:
-
-```bash
-journalctl -u gp-control-plane-core.service -u gp-control-plane-web.service -f
-```
-
-Для headless-установки используйте только `gp-control-plane-core.service`.
+Start/Stop/restart Core выполняются соответствующими командами systemctl только
+для этой службы. Его root-helper/права не принадлежат Web.
+[GP Plane Web](https://github.com/balbomush/GP-plane-web) устанавливается отдельной
+командой по его README из квалифицированного wheel. Самостоятельное удаление Web
+не удаляет Core/данные и не прерывает подбор. Автоматического deploy из браузера нет.
 
 ## Зависимость zapret2
 
@@ -185,42 +135,38 @@ wrapper в `/usr/local/libexec/gp-control-plane`. Существующая са�
 установка `/opt/zapret2` сохраняется. Для самостоятельной установки zapret2
 используйте [инструкции upstream](https://github.com/bol-van/zapret2).
 
-## Как Пользоваться
+## Управление подбором
 
-1. Откройте web panel: `http://<ip-board>:8080/`.
-2. Во вкладке `Подбор` выберите домены.
-3. Запустите обычный или экспериментальный поиск.
-4. Во вкладке `Терминал` смотрите ход работы.
-5. Во вкладке `Кандидаты` смотрите найденные стратегии.
-6. В `Настройки` -> `Бекапы и восстановление` скачайте архив, если нужен откат.
-7. Скопируйте подходящую стратегию вручную и проверьте ее там, где планируете использовать.
-
-Подбор может длиться несколько часов. Кнопка остановки сохраняет найденные к этому моменту стратегии.
-
-## Что Умеет Текущая Версия
-
-- запускать локальную web panel;
-- запускать подбор стратегий через штатный `blockcheck2.sh`;
-- проверять одну стратегию сразу на нескольких доменах;
-- ограничивать количество параллельных `curl`;
-- включать и выключать проверки HTTP, TLS 1.2, TLS 1.3, HTTP3/QUIC;
-- использовать встроенные пресеты доменов;
-- показывать прогресс, live-лог и историю запусков;
-- сохранять найденные стратегии в локальную SQLite-БД;
-- показывать стратегии по доменам и общие стратегии для выбранных доменов;
-- останавливать долгий подбор без потери уже найденных успешных стратегий;
-- создавать и восстанавливать локальные бекапы через UI.
-
-## Обновление
-
-Повторно запустите bootstrap:
+Действующие операции описаны в Core OpenAPI. Standard/Multi используют
+`POST /api/core/strategy-discovery/start-run`; Stop —
+`POST /api/core/strategy-discovery/stop-current-run`. Журнал доступен через
+`GET /api/core/runs/latest-log`; все запросы требуют Bearer.
+Пример Standard с одной TLS-проверкой:
 
 ```bash
-GP_BOOTSTRAP_URL='https://github.com/balbomush/GP-plane/releases/download/v0.4.4/bootstrap-linux.sh'
-curl -LfsS "$GP_BOOTSTRAP_URL" | GP_BRANCH=v0.4.4 bash
+curl -fsS -X POST "$BASE_URL/api/core/strategy-discovery/start-run" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"mode":"standard","domains":["example.com"],"protocols":["tcp"],"settings":{"enable_http":false,"enable_tls12":true,"enable_tls13":false,"include_quic":false}}'
 ```
 
-Это односторонний clean-install маршрут только из exact annotated tag. Ветки, `dev`, cache/candidate routes и rollback не являются пользовательскими способами установки.
+Полученный `run_id` связывает progress/log/history. Stop сохраняет найденные
+стратегии; запуск после перезагрузки не возобновляется автоматически. Для
+операторских экранов установите отдельный Web; UI не нужен для API или vault.
+Подбор проверяет стратегии на этом хосте, не применяет их к трафику роутера.
+
+## Обновление и recovery
+
+Пользовательский маршрут — bootstrap точного опубликованного annotated tag,
+указанного в release notes. Moving branch, dev и локальный candidate SHA
+не являются обычной пользовательской установкой. Подготовка и штатный restore
+vault описаны выше; старые теги/артефакты сохраняют прежнее поведение.
+
+Поддерживаются ровно два прежних source пути:
+`$HOME/gp/GP-access-control-plane/build/state` или
+`$HOME/gp/.GP-access-control-plane.data/state`. При наличии обоих bootstrap
+останавливается до `sudo`; внешние state paths не входят в эту миграцию.
+Найденный pending vault при живом source также останавливает повтор до sudo:
+повторное восстановление устаревшего снимка вместо текущих данных запрещено.
 
 ## Данные И Бекапы
 

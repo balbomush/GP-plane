@@ -2,3 +2,5 @@ include openapi.json
 include LICENSE
 include THIRD_PARTY_NOTICES.md
 recursive-include scripts *.sh *.py
+recursive-include tests *.py *.json *.mjs *.md
+include requirements-runtime.lock
