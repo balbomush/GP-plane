@@ -118,8 +118,11 @@ def _open_first_sse_frame(port: int, bearer: dict[str, str]) -> tuple[_SsePeer, 
 def _abort_sse_client(connection: socket.socket) -> None:
     """Issue an actual loopback TCP reset after receiving one full SSE frame."""
 
-    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh", 1, 0))
-    connection.close()
+    try:
+        linger_format = "HH" if os.name == "nt" else "ii"
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(linger_format, 1, 0))
+    finally:
+        connection.close()
 
 @contextmanager
 def _running_current_core(config: AppConfig) -> Any:
