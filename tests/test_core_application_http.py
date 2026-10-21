@@ -3353,6 +3353,9 @@ def _start_captured_server(
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
             reservation.bind(("127.0.0.1", 0))
             port = int(reservation.getsockname()[1])
+        # Linux may reuse a port from an earlier fixture with a different auth
+        # store. A bearer belongs to that server lifetime, not to the port.
+        _BEARER_AUTHORIZATION_BY_PORT.pop(port, None)
         runtime = create_core_runtime(
             config,
             "127.0.0.1",

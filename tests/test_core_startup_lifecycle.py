@@ -102,8 +102,19 @@ class TestServerLifecycleTests(unittest.TestCase):
                 self.assertIsNotNone(server._runtime)
                 self.assertIsNotNone(server._thread)
                 self.assertTrue(server._thread.is_alive())
+            self.assertFalse(server._thread.is_alive())
             with socket.socket() as probe:
+                # Match Cheroot's listener policy: a closed HTTP connection can
+                # leave TIME_WAIT without a live listener on Linux.
+                option = getattr(socket, "SO_EXCLUSIVEADDRUSE", socket.SO_REUSEADDR)
+                probe.setsockopt(socket.SOL_SOCKET, option, 1)
                 probe.bind(("127.0.0.1", server.port))
+                probe.listen(1)
+                with socket.socket() as competitor:
+                    competitor.setsockopt(socket.SOL_SOCKET, option, 1)
+                    with self.assertRaises(OSError):
+                        competitor.bind(("127.0.0.1", server.port))
+                        competitor.listen(1)
 
 
 class _TestServer:
