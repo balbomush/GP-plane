@@ -1,3 +1,3 @@
 """Linux control plane MVP."""
 
-__version__ = "0.4.5a1"
+__version__ = "0.4.5a2"

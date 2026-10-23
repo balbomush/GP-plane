@@ -68,6 +68,8 @@ class WebHttpRuntime:
                 return
             self._start_entered = True
         try:
+            if self._stream_lifecycle is not None:
+                self._stream_lifecycle.start_observer()
             self._server.start()
         finally:
             self._start_finished.set()
@@ -83,7 +85,12 @@ class WebHttpRuntime:
         with self._lifecycle_lock:
             self._stop_requested = True
             started = self._start_entered
+        observer_error: BaseException | None = None
         if self._stream_lifecycle is not None:
+            try:
+                self._stream_lifecycle.stop_observer()
+            except BaseException as error:
+                observer_error = error
             # Let a downstream-aborted Core reader leave its own finally
             # before Cheroot begins closing the same socket.  The small,
             # finite handoff prevents the close-order race without touching a
@@ -91,6 +98,8 @@ class WebHttpRuntime:
             terminal = self._stream_lifecycle.close_all()
             self._stream_lifecycle.wait_for_terminal(terminal, timeout=0.25)
         if not started:
+            if observer_error is not None:
+                raise observer_error
             return
         # Cheroot binds just before it publishes ``ready``.  A caller can
         # legitimately request stop in that small interval; wait for either
@@ -99,6 +108,8 @@ class WebHttpRuntime:
             self._start_finished.wait(0.001)
         if self._server.ready:
             self._server.stop()
+        if observer_error is not None:
+            raise observer_error
 
     # These narrow aliases let callers with the former listener-shaped facade
     # own shutdown explicitly without exposing Cheroot internals.

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import errno
 import os
+import logging
+import select
+import socket
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -32,9 +35,81 @@ class WebStreamLifecycle:
         self._terminal: dict[int, tuple[Callable[[], None], threading.Event]] = {}
         self._peer_streams: dict[tuple[str, int], set[int]] = {}
         self._next_stream_id = 1
+        self._peer_sockets: dict[tuple[str, int], socket.socket] = {}
+        self._observer_stop = threading.Event()
+        self._observer_thread: threading.Thread | None = None
+        self._observer_error: BaseException | None = None
+
+    def bind_peer(self, peer: tuple[str, int], transport: socket.socket) -> None:
+        """Attach only a socket owned by this listener's ConnectionClass."""
+        with self._lock:
+            self._peer_sockets[peer] = transport
+
+    def unbind_peer(self, peer: tuple[str, int], transport: socket.socket) -> None:
+        with self._lock:
+            if self._peer_sockets.get(peer) is transport:
+                self._peer_sockets.pop(peer)
+
+    def start_observer(self) -> None:
+        """Observe active streaming peers, never consume request bytes.
+
+        Cheroot cannot close a connection while its worker is waiting inside
+        the WSGI iterable. EOF/reset on that same socket must wake its existing
+        release callback without waiting for another application heartbeat.
+        One listener-owned thread covers the already bounded stream slots.
+        """
+        with self._lock:
+            if self._observer_thread is not None or self._observer_stop.is_set():
+                return
+            self._observer_thread = threading.Thread(target=self._observe_peers, name="gp-stream-peer", daemon=True)
+            self._observer_thread.start()
+
+    def stop_observer(self) -> None:
+        self._observer_stop.set()
+        with self._lock:
+            thread = self._observer_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                raise RuntimeError("stream peer observer did not stop")
+        if self._observer_error is not None:
+            raise RuntimeError("stream peer observer failed") from self._observer_error
+
+    def _observe_peers(self) -> None:
+        try:
+            while not self._observer_stop.wait(0.05):
+                self.observe_peers_once()
+        except BaseException as error:
+            self._observer_error = error
+            self._observer_stop.set()
+            logging.getLogger(__name__).exception("stream peer observer failed")
+
+    def observe_peers_once(self) -> None:
+        """EOF/reset only; readability with request data is not disconnect."""
+        disconnected = []
+        with self._lock:
+            # Keep socket identity stable through select/peek; Connection.close
+            # unbinds under this same lock before closing its descriptor.
+            for peer in tuple(self._peer_streams):
+                transport = self._peer_sockets.get(peer)
+                if transport is None:
+                    continue
+                try:
+                    readable, _, _ = select.select([transport], [], [], 0)
+                    gone = bool(readable) and transport.recv(1, socket.MSG_PEEK) == b""
+                except OSError as error:
+                    if getattr(error, "errno", None) not in {errno.ECONNRESET, errno.ECONNABORTED, 10053, 10054}:
+                        raise
+                    gone = True
+                if gone:
+                    disconnected.append((peer, transport))
+        for peer, transport in disconnected:
+            self.close_peer(peer, expected_socket=transport)
 
     def register(self, peer: tuple[str, int] | None, close: Callable[[], None]) -> int:
         with self._lock:
+            if self._observer_error is not None:
+                raise RuntimeError("stream peer observer failed") from self._observer_error
             stream_id = self._next_stream_id
             self._next_stream_id += 1
             self._streams[stream_id] = close
@@ -58,8 +133,10 @@ class WebStreamLifecycle:
                     if not peer_streams:
                         self._peer_streams.pop(peer, None)
 
-    def close_peer(self, peer: tuple[str, int]) -> None:
+    def close_peer(self, peer: tuple[str, int], *, expected_socket: socket.socket | None = None) -> None:
         with self._lock:
+            if expected_socket is not None and self._peer_sockets.get(peer) is not expected_socket:
+                return
             stream_ids = tuple(self._peer_streams.pop(peer, ()))
             closes = tuple(self._streams.pop(stream_id) for stream_id in stream_ids if stream_id in self._streams)
         for close in closes:
@@ -120,6 +197,9 @@ class GPHTTPConnection(HTTPConnection):
         self._gp_close_started = False
         peer = self.socket.getpeername()
         self._gp_peer = (str(peer[0]), int(peer[1])) if isinstance(peer, tuple) and len(peer) >= 2 else None
+        lifecycle = getattr(self.server, "gp_stream_lifecycle", None)
+        if lifecycle is not None and self._gp_peer is not None:
+            lifecycle.bind_peer(self._gp_peer, self.socket)
 
     def close(self) -> None:
         if self._gp_close_started:
@@ -127,6 +207,8 @@ class GPHTTPConnection(HTTPConnection):
         self._gp_close_started = True
         lifecycle_error: BaseException | None = None
         lifecycle = getattr(self.server, "gp_stream_lifecycle", None)
+        if lifecycle is not None and self._gp_peer is not None:
+            lifecycle.unbind_peer(self._gp_peer, self.socket)
         close_peer = getattr(lifecycle, "close_peer", None)
         if callable(close_peer) and self._gp_peer is not None:
             try:
