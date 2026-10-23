@@ -1,5 +1,7 @@
 """Client cancellation must not wait for an application heartbeat."""
 import errno,socket,threading,unittest
+from pathlib import Path
+from types import SimpleNamespace
 from contextlib import contextmanager
 from unittest.mock import patch
 from gp_control_plane.http.cheroot_connection import WebStreamLifecycle
@@ -15,6 +17,27 @@ def pair():
             with server:yield client,server,peer
 
 class PeerLifetimeTests(unittest.TestCase):
+    def test_core_event_cancel_interrupts_wait_before_next_auth_tick(self):
+        from bottle import request
+        from gp_control_plane.http import core_app
+        life=WebStreamLifecycle();services=SimpleNamespace(config=SimpleNamespace(output=SimpleNamespace(state_dir=Path('unused-synthetic-state'))),stream_lifecycle=life)
+        request.bind({'REMOTE_ADDR':'127.0.0.1','REMOTE_PORT':'12345'})
+        finished=threading.Event()
+        with patch.object(core_app,'_legacy') as legacy:
+            legacy.return_value._event_payloads.return_value={}
+            stream=core_app._events(services,lambda *args:None,'synthetic','/api/internal/web-events/stream')
+            self.assertEqual(b': keepalive\n\n',next(stream))
+            def read():
+                try:next(stream)
+                except StopIteration:finished.set()
+            worker=threading.Thread(target=read);worker.start()
+            try:
+                life.close_peer(('127.0.0.1',12345))
+                self.assertTrue(finished.wait(.3),'terminal Event did not interrupt sleep')
+            finally:
+                worker.join(2);stream.close()
+            self.assertFalse(worker.is_alive());self.assertEqual(0,life.active_count())
+
     def test_real_eof_releases_only_own_stream_and_keeps_two_active_limit(self):
         life=WebStreamLifecycle();admission=StreamAdmission()
         with pair() as (a,sa,pa),pair() as (b,sb,pb):

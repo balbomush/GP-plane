@@ -498,7 +498,7 @@ def _events(services: CoreServices, authorize: AuthAdapter, authorization: str |
                         authorize(config.output.state_dir, authorization)
                         yield b": keepalive\n\n"
                         heartbeat_at = now
-                    time.sleep(1)
+                    terminal.wait(1)
                 except AuthenticationError:
                     return
                 except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
@@ -519,7 +519,7 @@ def _events(services: CoreServices, authorize: AuthAdapter, authorization: str |
                         # A terminal Core state teardown can make a later auth
                         # recheck fail after stream headers have committed.
                         return
-                    time.sleep(1)
+                    terminal.wait(1)
         finally:
             if lifecycle is not None and stream_id is not None:
                 lifecycle.release(stream_id, peer, close)
