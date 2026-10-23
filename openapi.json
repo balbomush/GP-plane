@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "GP Control Plane API",
-    "version": "0.4.4",
+    "version": "0.4.5a1",
     "description": "Alpha Core/Web split API contract for the headless runtime and штатный Web UI. The contract contains the registered /api/core, /api/service, /api/web and /openapi.json routes; legacy root-level APIs are removed before 1.0."
   },
   "servers": [
