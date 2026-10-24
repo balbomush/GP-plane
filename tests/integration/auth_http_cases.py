@@ -590,7 +590,16 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 release_next_loop = threading.Event()
                 sleep_delays: list[float] = []
 
-                def controlled_sleep(delay: float) -> None:
+                class ControlledTerminal:
+                    def __init__(self):
+                        self.event=threading.Event()
+                    def set(self):self.event.set()
+                    def is_set(self):return self.event.is_set()
+                    def wait(self,delay: float):
+                        controlled_wait(delay)
+                        return self.event.is_set()
+
+                def controlled_wait(delay: float) -> None:
                     sleep_delays.append(delay)
                     sleep_entered.set()
                     if not release_next_loop.wait(timeout=_PROCESS_TIMEOUT_SECONDS):
@@ -615,7 +624,13 @@ class BearerAuthHttpTests(OwnedHttpCase):
                     self.assertEqual(status, 200, body)
                     old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
-                    with mock.patch.object(api_server.time, "sleep", side_effect=controlled_sleep):
+                    # SSE-LIFETIME-FIX replaced non-interruptible sleep with a
+                    # listener-owned terminal Event. Instrument only that Core
+                    # module's Event factory, never global time/threading APIs.
+                    from gp_control_plane.http import core_app
+                    controlled_threading=mock.Mock(wraps=threading)
+                    controlled_threading.Event.side_effect=ControlledTerminal
+                    with mock.patch.object(core_app,"threading",controlled_threading):
                         stream_path = "/api/internal/web-events/stream" if topology == "core" else "/api/web/events/stream"
                         connection, response = _open_sse(port, old_bearer, path=stream_path)
                         self.assertEqual(response.status, 200)
