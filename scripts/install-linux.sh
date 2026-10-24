@@ -82,12 +82,28 @@ runuser -u "$INSTALL_USER" -- python3 "$SOURCE_DIR/scripts/prepare-zapret2.py" -
 install -d -m 0700 -o "$INSTALL_USER" -g "$group" "$prepare_dir/python"
 install -m 0644 "$SOURCE_DIR/requirements/a5-transport.lock" "$prepare_dir/python/runtime.lock"
 cmp -s "$SOURCE_DIR/requirements/a5-transport.lock" "$prepare_dir/python/runtime.lock" || fail 'staged Core runtime lock mismatch; previous GP was preserved'
+install -d -m 0700 -o "$INSTALL_USER" -g "$group" "$prepare_dir/python/pip-cache" "$prepare_dir/python/pip-tmp"
+# pip must not inherit user/site/global config or redirecting PIP_* options.
+# Preserve only explicit network/proxy trust settings; all writes stay in the
+# selected venv or this user-owned preparation namespace (including build children).
+pip_user() {
+  local pip_python="$1"; shift
+  local pip_proxy
+  local -a pip_environment=("PATH=$PATH" "HOME=$target_home" "USER=$INSTALL_USER" "LOGNAME=$INSTALL_USER"
+    "PIP_CONFIG_FILE=/dev/null" "PIP_CACHE_DIR=$prepare_dir/python/pip-cache"
+    "TMPDIR=$prepare_dir/python/pip-tmp" "TMP=$prepare_dir/python/pip-tmp" "TEMP=$prepare_dir/python/pip-tmp"
+    "PIP_NO_INPUT=1" "PIP_DISABLE_PIP_VERSION_CHECK=1")
+  for pip_proxy in http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE REQUESTS_CA_BUNDLE; do
+    if [[ -v "$pip_proxy" ]]; then pip_environment+=("$pip_proxy=${!pip_proxy}"); fi
+  done
+  runuser -u "$INSTALL_USER" -- env -i "${pip_environment[@]}" "$pip_python" -I -m pip "$@"
+}
 runuser -u "$INSTALL_USER" -- python3 -m venv "$prepare_dir/python/venv"
-runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -m pip download --only-binary=:all: --require-hashes --dest "$prepare_dir/python/wheels" -r "$prepare_dir/python/runtime.lock"
-runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -m pip wheel --no-deps --wheel-dir "$prepare_dir/python/wheels" "$SOURCE_DIR"
-runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -m pip install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
-runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -m pip install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
-runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -m pip check
+pip_user "$prepare_dir/python/venv/bin/python" download --only-binary=:all: --require-hashes --dest "$prepare_dir/python/wheels" -r "$prepare_dir/python/runtime.lock"
+pip_user "$prepare_dir/python/venv/bin/python" wheel --no-deps --wheel-dir "$prepare_dir/python/wheels" "$SOURCE_DIR"
+pip_user "$prepare_dir/python/venv/bin/python" install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
+pip_user "$prepare_dir/python/venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
+pip_user "$prepare_dir/python/venv/bin/python" check
 # Match the prepared package to the already validated source, including future
 # releases. A stale or mismatched wheel must fail before stopping the old GP.
 runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -c 'import sys, tomllib, bottle, cheroot; from pathlib import Path; from importlib.metadata import version; from gp_control_plane import __version__; from gp_control_plane.web.docs import openapi_json_bytes; expected = tomllib.loads((Path(sys.argv[1]) / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]; (__version__ == expected == version("gp-access-control-plane")) or sys.exit("ERROR: prepared GP version does not match validated source"); openapi_json_bytes() or sys.exit("ERROR: prepared GP OpenAPI document is empty")' "$SOURCE_DIR"
@@ -147,9 +163,9 @@ EOF
 chmod 0755 /usr/local/libexec/gp-control-plane/nfqws2 /usr/local/libexec/gp-control-plane/blockcheck2.sh
 install -d -m 0700 -o "$INSTALL_USER" -g "$group" "$state_parent" "$state_dir"
 runuser -u "$INSTALL_USER" -- python3 -m venv "$install_dir/.venv"
-runuser -u "$INSTALL_USER" -- "$install_dir/.venv/bin/python" -m pip install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
-runuser -u "$INSTALL_USER" -- "$install_dir/.venv/bin/python" -m pip install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
-runuser -u "$INSTALL_USER" -- "$install_dir/.venv/bin/python" -m pip check
+pip_user "$install_dir/.venv/bin/python" install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
+pip_user "$install_dir/.venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
+pip_user "$install_dir/.venv/bin/python" check
 # The application validates the pending vault ID and performs the semantic and
 # SQLite checks itself. Root only invokes that user-owned operation.
 if [ "$INITIAL_INSTALL" = off ]; then

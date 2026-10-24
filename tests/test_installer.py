@@ -208,7 +208,7 @@ class CleanInstallerTests(unittest.TestCase):
 
     def test_installer_prepares_v2fly_once_as_install_user_without_blocking_service_start(self) -> None:
         prepare = 'runuser -u "$INSTALL_USER" -- env GP_STATE_DIR="$state_dir" "$install_dir/.venv/bin/gp-control-plane" domain-sources prepare-v2fly'
-        pip_install = 'runuser -u "$INSTALL_USER" -- "$install_dir/.venv/bin/python" -m pip install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane'
+        pip_install = 'pip_user "$install_dir/.venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane'
         first_service_start = 'systemctl daemon-reload; systemctl enable --now gp-control-plane-core.service'
 
         self.assertEqual(self.installer.count(prepare), 1)
