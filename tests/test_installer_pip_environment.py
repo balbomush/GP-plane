@@ -35,8 +35,11 @@ class InstallerPipEnvironmentTests(unittest.TestCase):
             root=Path(raw);runtime=root/'venv';venv.EnvBuilder(with_pip=True).create(runtime);python=runtime/'bin/python';wheel=fixture_wheel(root)
             red=root/'red-outside';sentinel=root/'protected-outside';sentinel.mkdir();(sentinel/'canary').write_bytes(b'original')
             site=runtime/'pip.conf';site.write_text('[install]\ntarget = '+str(red)+'\n')
-            control=dict(os.environ,PIP_CONFIG_FILE=str(site),PIP_TARGET=str(red),PIP_DISABLE_PIP_VERSION_CHECK='1')
-            subprocess.run([str(python),'-I','-m','pip','install','--no-index','--no-deps',str(wheel)],env=control,check=True,capture_output=True,timeout=45)
+            control={key:value for key,value in os.environ.items() if not key.upper().startswith('PIP_') and key.upper() not in ('PYTHONHOME','PYTHONPATH')}
+            # Red install reproduces the inherited redirect while all actual
+            # host config stays disabled. Config-only red is parser-qualified.
+            control.update(PIP_CONFIG_FILE=os.devnull,PIP_TARGET=str(red),PIP_CACHE_DIR=str(root/'red-pip-cache'),PIP_DISABLE_PIP_VERSION_CHECK='1')
+            subprocess.run([str(python),'-I','-m','pip','install','--no-index','--no-deps','--no-cache-dir',str(wheel)],env=control,check=True,capture_output=True,timeout=45)
             self.assertTrue((red/'gp_pip_isolation_fixture.py').is_file(),'red control must reproduce redirect')
             site.write_text('[install]\ntarget = '+str(sentinel)+'\n');user_home=root/'fixture-home';user_config=user_home/'.config/pip/pip.conf';user_config.parent.mkdir(parents=True);user_config.write_text(site.read_text())
             prepare=root/'prepare'
