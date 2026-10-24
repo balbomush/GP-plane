@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "GP Control Plane API",
-    "version": "0.4.5a2",
+    "version": "0.4.5",
     "description": "Alpha Core/Web split API contract for the headless runtime and штатный Web UI. The contract contains the registered /api/core, /api/service, /api/web and /openapi.json routes; legacy root-level APIs are removed before 1.0."
   },
   "servers": [
@@ -4890,7 +4890,7 @@
       },
       "WebEventsStream": {
         "summary": "Server-sent Web UI event stream",
-        "value": "event: status\ndata: {\"state\":\"idle\",\"version\":{\"version\":\"0.4.5a2\"}}\n\nevent: presets\ndata: {\"version\":\"sha256:184a7f8fd2b0\"}\n\n: keepalive\n\n"
+        "value": "event: status\ndata: {\"state\":\"idle\",\"version\":{\"version\":\"0.4.5\"}}\n\nevent: presets\ndata: {\"version\":\"sha256:184a7f8fd2b0\"}\n\n: keepalive\n\n"
       },
       "ServiceStatus": {
         "summary": "Состояние установленного сервиса",
@@ -4912,8 +4912,8 @@
             }
           },
           "version": {
-            "version": "0.4.5a2",
-            "installed_ref": "v0.4.5a2",
+            "version": "0.4.5",
+            "installed_ref": "v0.4.5",
             "commit": "0123456789abcdef0123456789abcdef01234567"
           },
           "data_state": {
@@ -4932,8 +4932,8 @@
         "summary": "Доступные релизы",
         "value": {
           "current": {
-            "version": "0.4.5a2",
-            "installed_ref": "v0.4.5a2",
+            "version": "0.4.5",
+            "installed_ref": "v0.4.5",
             "commit": "0123456789abcdef0123456789abcdef01234567"
           },
           "releases": [
