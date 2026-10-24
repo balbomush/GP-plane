@@ -71,7 +71,17 @@ uname() { case "$1" in -s) echo Linux;; -m) echo "${TEST_MACHINE:-aarch64}";; es
 apt-get() { event "apt:$*"; [ "$TEST_FAIL" != apt ]; }
 mktemp() { command mktemp -d "$TEST_TMP/preparation.XXXXXX"; }
 chmod() { :; }
-install() { event "install:$*"; }
+install() {
+  event "install:$*"
+  local target=${!#}
+  case "$target" in "$TEST_TMP"/preparation.*/*)
+    if [ "$1" = -d ]; then command mkdir -p -- "$target";
+    elif [ "$1" = -m ] && [ "$2" = 0644 ]; then
+      if [ "$TEST_FAIL" = lock-copy ]; then printf 'corrupt staged lock\n' > "$target";
+      else command cp -- "$3" "$4"; fi
+    else return 64; fi;;
+  esac
+}
 bash() {
   event zapret-prepare
   case "$TEST_FAIL" in network|checksum|archive|architecture)
@@ -84,8 +94,10 @@ runuser() {
     *" --verify "*) return 0;;
     *" --probe "*) [ "$TEST_FAIL" != runtime ]; return;;
     *" -m venv "*) [ "$TEST_FAIL" != venv ]; return;;
+    *" -m pip download "*) case "$TEST_FAIL" in dependencies|dependency-checksum|dependency-missing) return 65;; *) return 0;; esac;;
     *" -m pip wheel "*) [ "$TEST_FAIL" != wheel ]; return;;
     *" -m pip install "*) [ "$TEST_FAIL" != package ]; return;;
+    *" -m pip check"*) [ "$TEST_FAIL" != dependency-check ]; return;;
     *" -c "*)
       if [ "$TEST_FAIL" = import ]; then return 62; fi
       # Successful preparation stops here, before any /opt or activation work.
@@ -101,7 +113,7 @@ rm() {
 }
 source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 0000000000000000000000000000000000000001 --web off --initial-install off
 '''
-        for failure in ("apt", "network", "checksum", "archive", "architecture", "runtime", "venv", "wheel", "package", "import", "none"):
+        for failure in ("apt", "network", "checksum", "archive", "architecture", "runtime", "venv", "lock-copy", "dependencies", "dependency-checksum", "dependency-missing", "dependency-check", "wheel", "package", "import", "none"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw); home = root / "home"; source = root / "source"
                 old = home / "gp/GP-access-control-plane"; state = home / "gp/.GP-access-control-plane.data/state"
@@ -110,6 +122,8 @@ source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 00
                 (state / "user-data").write_bytes(b"existing user data")
                 (source / ".git").mkdir(parents=True); (source / "scripts").mkdir()
                 (source / "scripts/clean-install-vault.py").write_text("# fixture", encoding="utf-8")
+                (source / "requirements").mkdir()
+                shutil.copyfile(ROOT / "requirements/a5-transport.lock", source / "requirements/a5-transport.lock")
                 events = root / "events"
                 env = {**os.environ, "TEST_EVENTS": shell_path(events), "TEST_HOME": shell_path(home),
                        "TEST_SOURCE": shell_path(source), "TEST_TMP": shell_path(root), "TEST_FAIL": failure}
@@ -126,6 +140,8 @@ source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 00
                 if failure == "none":
                     self.assertIn("PREPARATION_COMPLETE", trace, result.stderr)
                     self.assertIn("--no-index", trace)
+                    self.assertIn("--require-hashes", trace)
+                    self.assertIn("--no-deps", trace)
                 else:
                     self.assertNotIn("PREPARATION_COMPLETE", trace)
 
