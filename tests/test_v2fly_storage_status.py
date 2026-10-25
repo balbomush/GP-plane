@@ -47,8 +47,10 @@ class V2flyStorageStatusTests(unittest.TestCase):
                 return original(path, *args, **kwargs)
             with patch.object(Path, 'read_text', autospec=True, side_effect=denied):
                 self.assertEqual(v2fly_storage_status_payload(config)['state'], 'error')
-            manifest.unlink()
             v2fly_group_cache_dir(state).mkdir()
+            with patch.object(Path, 'iterdir', side_effect=PermissionError(13, 'synthetic group denial')):
+                self.assertEqual(v2fly_storage_status_payload(config)['state'], 'error')
+            manifest.unlink()
             with patch.object(Path, 'iterdir', side_effect=PermissionError(13, 'synthetic group denial')):
                 self.assertEqual(v2fly_storage_status_payload(config)['state'], 'error')
 
@@ -62,6 +64,9 @@ class V2flyStorageStatusTests(unittest.TestCase):
             ('invalid-categories', b'{"categories":"example"}', 'error'),
             ('invalid-member', b'{"categories":[null]}', 'error'),
             ('manifest-ready', b'{"categories":["example"]}', 'ready'),
+            ('manifest-only', b'{"categories":["example"]}', 'missing'),
+            ('manifest-empty-index', b'{"categories":["example"]}', 'missing'),
+            ('manifest-group-is-file', b'{"categories":["example"]}', 'error'),
             ('legacy-ready', None, 'ready'),
             ('group-is-file', None, 'error'),
         )
@@ -73,12 +78,14 @@ class V2flyStorageStatusTests(unittest.TestCase):
                 if content is not None:
                     manifest.parent.mkdir(parents=True, exist_ok=True)
                     manifest.write_bytes(content)
-                if name in ('legacy-ready', 'invalid-json'):
+                if name in ('legacy-ready', 'invalid-json', 'manifest-ready'):
                     # An existing legacy group must not hide a corrupt manifest.
                     groups = v2fly_group_cache_dir(state)
                     groups.mkdir(parents=True, exist_ok=True)
                     (groups / 'example').write_text('domain:example.com\n', encoding='utf-8')
-                if name == 'group-is-file':
+                if name == 'manifest-empty-index':
+                    v2fly_group_cache_dir(state).mkdir(parents=True, exist_ok=True)
+                if name in ('group-is-file', 'manifest-group-is-file'):
                     groups = v2fly_group_cache_dir(state)
                     groups.parent.mkdir(parents=True, exist_ok=True)
                     groups.write_text('not a directory', encoding='utf-8')

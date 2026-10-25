@@ -263,6 +263,10 @@ def read_v2fly_group_manifest(state_dir: Path) -> tuple[dict[str, Any] | None, d
                     raise ValueError("invalid v2fly local manifest category")
                 _clean_category(category)
             categories = _categories_from_manifest(payload)
+            # A retained manifest alone is not a prepared local catalog.
+            # Enumerate the physical index; group contents are read on demand.
+            if not _categories_from_group_dir(state_dir):
+                return None, None
         except (OSError, UnicodeError, ValueError) as exc:
             return None, _v2fly_error("local_storage", exc)
         if categories:
