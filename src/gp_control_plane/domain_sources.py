@@ -5,6 +5,7 @@ import json
 import io
 import os
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -243,16 +244,27 @@ def list_v2fly_categories_local(
 
 def read_v2fly_group_manifest(state_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
     manifest_path = v2fly_group_manifest_path(state_dir)
-    if manifest_path.exists():
+    try:
+        manifest_path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return None, _v2fly_error("local_storage", exc)
+    else:
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except OSError as exc:
+            if not isinstance(payload, dict):
+                raise ValueError("invalid v2fly local manifest")
+            raw_categories = payload.get("categories")
+            if not isinstance(raw_categories, list) or not raw_categories:
+                raise ValueError("invalid v2fly local manifest categories")
+            for category in raw_categories:
+                if not isinstance(category, str):
+                    raise ValueError("invalid v2fly local manifest category")
+                _clean_category(category)
+            categories = _categories_from_manifest(payload)
+        except (OSError, UnicodeError, ValueError) as exc:
             return None, _v2fly_error("local_storage", exc)
-        except json.JSONDecodeError as exc:
-            return None, _v2fly_error("local_storage", exc)
-        if not isinstance(payload, dict):
-            return None, _v2fly_error("local_storage", ValueError("invalid v2fly local manifest"))
-        categories = _categories_from_manifest(payload)
         if categories:
             return {
                 "source": str(payload.get("source") or "v2fly/domain-list-community"),
@@ -262,7 +274,10 @@ def read_v2fly_group_manifest(state_dir: Path) -> tuple[dict[str, Any] | None, d
                 "count": len(categories),
                 "categories": categories,
             }, None
-    categories = _categories_from_group_dir(state_dir)
+    try:
+        categories = _categories_from_group_dir(state_dir)
+    except OSError as exc:
+        return None, _v2fly_error("local_storage", exc)
     if categories:
         return {
             "source": "v2fly/domain-list-community",
@@ -272,7 +287,7 @@ def read_v2fly_group_manifest(state_dir: Path) -> tuple[dict[str, Any] | None, d
             "count": len(categories),
             "categories": categories,
         }, None
-    return None, _v2fly_error("local_storage", FileNotFoundError("v2fly local storage is not prepared"))
+    return None, None
 
 
 def write_v2fly_group_manifest(state_dir: Path, payload: dict[str, Any]) -> None:
@@ -504,11 +519,13 @@ def _categories_from_manifest(payload: dict[str, Any]) -> list[str]:
 
 def _categories_from_group_dir(state_dir: Path) -> list[str]:
     group_dir = v2fly_group_cache_dir(state_dir)
-    if not group_dir.exists() or not group_dir.is_dir():
+    try:
+        group_dir.lstat()
+    except FileNotFoundError:
         return []
     categories: list[str] = []
     for path in group_dir.iterdir():
-        if not path.is_file():
+        if not stat.S_ISREG(path.stat().st_mode):
             continue
         try:
             categories.append(_clean_category(path.name))

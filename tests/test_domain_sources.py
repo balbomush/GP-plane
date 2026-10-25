@@ -251,8 +251,9 @@ domain:youtube.com
 
             self.assertEqual(result["source"], "missing")
             self.assertEqual(result["status"], "missing")
-            self.assertEqual(result["error_kind"], "cache")
-            self.assertIn("local", result["error_message"])
+            self.assertEqual(result["error_kind"], "")
+            self.assertEqual(result["error_message"], "")
+            self.assertEqual(result["errors"], [])
 
     def test_parse_v2fly_revision_reads_github_commit_sha(self) -> None:
         self.assertEqual(parse_v2fly_revision('{"sha": "abc123"}'), "abc123")
