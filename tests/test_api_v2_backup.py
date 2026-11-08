@@ -45,6 +45,7 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
             admission = OperationAdmission()
             api_v2.register_backups(app, self.state, admission=admission)
             api_v2.register_service(app, self.state, admission=admission)
+            api_v2.register_domain_lists(app, self.state, admission=admission)
 
     def test_saved_copy_is_user_only_and_upload_does_not_replace_it(self):
         self.assertTrue(self.configured, "backup routes are missing")
@@ -127,6 +128,44 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
                               for file in (self.state / path).rglob("*") if file.is_file()},
                              {file.relative_to(target / path): file.read_bytes()
                               for file in (target / path).rglob("*") if file.is_file()})
+
+    def test_backup_observes_one_snapshot_during_domain_list_replacement(self):
+        token = self.call("POST", "/api/v2/access/authentication", {
+            "username": "admin", "password": "admin",
+        })[2]["bearer_token"]
+        lists = "/api/v2/data/domain-lists"
+        _, _, item = self.call("POST", lists, {
+            "name": "before", "domains": [{"domain": "before.example"}],
+        }, token)
+        started, release = Event(), Event()
+        export = user_backup._export
+
+        def hold_snapshot(conn, *args):
+            conn.execute("SELECT id FROM domain_presets").fetchall()
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("export was not released")
+            return export(conn, *args)
+
+        with patch.object(user_backup, "_export", side_effect=hold_snapshot), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.call, "POST", ROOT, b"", token)
+            try:
+                self.assertTrue(started.wait(3))
+                self.assertEqual(self.call("PUT", lists + "/" + str(item["id"]), {
+                    "name": "after", "domains": [{"domain": "after.example"}],
+                }, token)[0], 200)
+            finally:
+                release.set()
+            self.assertEqual(pending.result(5)[0], 200)
+        with ZipFile(user_backup.saved_path(self.state)) as archive:
+            presets = archive.read("snapshot/data/domain_presets.ndjson")
+            domains = archive.read("snapshot/data/domains.ndjson")
+            self.assertIn(b'"label":"before"', presets)
+            self.assertNotIn(b'"label":"after"', presets)
+            self.assertIn(b"before.example", domains)
+            self.assertNotIn(b"after.example", domains)
+        self.assertEqual(self.call("GET", lists + "/" + str(item["id"]) + "/domains", b"", token)[2]["items"],
+                         [{"domain": "after.example"}])
 
     def test_restore_upload_owns_admission_before_body_and_refuses_truncated_input(self):
         token = self.call("POST", "/api/v2/access/authentication", {

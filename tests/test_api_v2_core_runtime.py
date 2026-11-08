@@ -5,6 +5,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 import json
 import sqlite3
+from time import monotonic, sleep
 import unittest
 
 from gp_control_plane.config import build_config
@@ -62,7 +63,7 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
         def connect(cleanup, bearer):
             connection = cleanup.enter_context(closing(HTTPConnection("127.0.0.1", self.port, timeout=10)))
             connection.request("GET", base + "/search/events", headers={"Authorization": "Bearer " + bearer})
-            return cleanup.enter_context(closing(connection.getresponse()))
+            return connection, cleanup.enter_context(closing(connection.getresponse()))
 
         def first_snapshot(stream):
             self.assertEqual(stream.status, 200)
@@ -72,20 +73,35 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
             self.assertEqual(stream.readline(), b"\n")
 
         with ExitStack() as cleanup:
-            first, second = connect(cleanup, token), connect(cleanup, token)
+            first_client, first = connect(cleanup, token)
+            _, second = connect(cleanup, token)
             first_snapshot(first)
             first_snapshot(second)
-            rejected = connect(cleanup, token)
+            _, rejected = connect(cleanup, token)
             self.assertEqual(rejected.status, 503)
             self.assertEqual(json.load(rejected)["error"]["code"], "stream_capacity_exhausted")
+            first.close()
+            first_client.close()
+            deadline = monotonic() + 7
+            while monotonic() < deadline:
+                _, replacement = connect(cleanup, token)
+                if replacement.status == 200:
+                    first_snapshot(replacement)
+                    break
+                self.assertEqual(replacement.status, 503)
+                self.assertEqual(json.load(replacement)["error"]["code"], "stream_capacity_exhausted")
+                sleep(0.1)
+            else:
+                self.fail("SSE disconnect did not release its permit")
             status, _, _ = self.call("PUT", base + "/access/change_password", {
                 "username": "admin", "old_password": credentials["password"], "new_password": "new-fixture-only",
             }, token)
             self.assertEqual(status, 204)
-            self.assertEqual(first.read(), b"")
+            self.assertEqual(replacement.read(), b"")
             self.assertEqual(second.read(), b"")
             status, _, login = self.call("POST", base + "/access/authentication", {
                 **credentials, "password": "new-fixture-only",
             })
             self.assertEqual(status, 200)
-            first_snapshot(connect(cleanup, login["bearer_token"]))
+            _, next_stream = connect(cleanup, login["bearer_token"])
+            first_snapshot(next_stream)

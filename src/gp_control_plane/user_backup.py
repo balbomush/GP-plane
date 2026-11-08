@@ -1,6 +1,6 @@
 """The user-data subset of the Core snapshot archive for API 2."""
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import logging
 from pathlib import Path, PurePosixPath
 import shutil
@@ -223,12 +223,10 @@ def prepare_download(archive, legacy_snapshot: Path | None, stage: Path):
     if manifest.get("completed") != "true":
         raise ValueError("Saved backup is incomplete")
     if manifest.get("schema_version") == "7":
-        private_state = stage / "conversion"
-        _restore_folder(private_state, folder, stage)
         output = stage / "export"
         output.mkdir()
-        with closing(storage.connect_api2(private_state)) as conn:
-            _export(conn, _asset_root(private_state), output)
+        with _loaded_user_tables(folder, stage, "7") as conn:
+            _export(conn, folder / "assets", output)
         converted = stage / "user.zip"
         _zip(output, converted)
         return converted
@@ -345,7 +343,16 @@ def _restore_folder(state_dir: Path, folder: Path, stage: Path) -> None:
     manifest = backups._read_manifest(folder / "manifest.json")
     if manifest.get("completed") != "true":
         raise ValueError("Incomplete backup")
-    version = manifest.get("schema_version")
+    with _loaded_user_tables(folder, stage, manifest.get("schema_version")) as source:
+        for composition in _compositions(source, folder / "assets").values():
+            strategy_assets.persist(_asset_root(state_dir), composition)
+        with storage.connect_api2(state_dir) as target:
+            target.execute("BEGIN IMMEDIATE")
+            _replace_rows(source, target)
+
+
+@contextmanager
+def _loaded_user_tables(folder, stage, version):
     with closing(sqlite3.connect(":memory:")) as source:
         source.row_factory = sqlite3.Row
         source.execute("PRAGMA foreign_keys=ON")
@@ -363,8 +370,4 @@ def _restore_folder(state_dir: Path, folder: Path, stage: Path) -> None:
             """UPDATE runs SET status='failed', error_json=?, finished_at=NULL
                WHERE status IN ('starting','running','stopping')""", (message,),
         )
-        for composition in _compositions(source, folder / "assets").values():
-            strategy_assets.persist(_asset_root(state_dir), composition)
-        with storage.connect_api2(state_dir) as target:
-            target.execute("BEGIN IMMEDIATE")
-            _replace_rows(source, target)
+        yield source
