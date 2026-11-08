@@ -3,10 +3,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from subprocess import CompletedProcess, TimeoutExpired
 from threading import Event
 import unittest
+from unittest.mock import patch
 
-from gp_control_plane.application.core_update import CoreUpdate
+from gp_control_plane.application.core_update import CoreUpdate, _probe_scope
 from gp_control_plane.application.operation_admission import OperationAdmission, OperationBusy
 
 
@@ -15,6 +17,23 @@ SECOND = "d790f561-275a-47e3-b36f-a55a7b53b1df"
 
 
 class UpdateTests(unittest.TestCase):
+    def test_scope_discovery_distinguishes_active_absent_and_unverified(self):
+        for output, expected in (
+            ("LoadState=loaded\nActiveState=active\n", True),
+            ("LoadState=not-found\nActiveState=inactive\n", False),
+            ("LoadState=loaded\nActiveState=failed\n", False),
+            ("", None),
+        ):
+            with self.subTest(output=output), patch(
+                "gp_control_plane.application.core_update.sys.platform", "linux"
+            ), patch("gp_control_plane.application.core_update.subprocess.run",
+                     return_value=CompletedProcess([], 0, output, "")):
+                self.assertIs(_probe_scope(), expected)
+        with patch("gp_control_plane.application.core_update.sys.platform", "linux"), patch(
+            "gp_control_plane.application.core_update.subprocess.run", side_effect=TimeoutExpired([], 3)
+        ):
+            self.assertIsNone(_probe_scope())
+
     def test_durable_replay_and_busy_before_preparation(self):
         with TemporaryDirectory() as root:
             state = Path(root)

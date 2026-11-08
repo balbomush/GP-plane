@@ -51,8 +51,11 @@ state, update_id, version, status = sys.argv[1:]
 folder = pathlib.Path(state) / "strategy-finder"
 target = folder / "core-update.json"
 current = json.loads(target.read_text(encoding="utf8"))
-if current["update_id"] != update_id or current["target_version"] != version:
+if (current["update_id"] != update_id or current["target_version"] != version
+        or current["state"] != "running"):
     raise SystemExit("Core update report no longer owns this installation")
+if status == "confirm":
+    raise SystemExit(0)
 error = None if status != "failed" else {
     "code": "installation_failed", "message": "Core installer did not complete",
 }
@@ -212,6 +215,7 @@ if [ "${1:-}" = --prepared-update ]; then
   [ "${#expected_version}" -le 64 ] || fail 'invalid update version length'
   grep -Eq '/gp-control-plane-core-update\.scope$' /proc/self/cgroup || fail 'installer must run in its managed scope'
   find_managed_core
+  update_report confirm
   trap 'rc=$?; if [ "$rc" -ne 0 ]; then update_report failed || true; fi' EXIT
   core_user "$install_dir/.venv/bin/python" -I -c \
     'import sys; from gp_control_plane import __version__; from gp_control_plane.application.core_update import version_key; assert version_key(sys.argv[1]) >= version_key(__version__)' "$expected_version"

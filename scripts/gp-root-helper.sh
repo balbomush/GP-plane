@@ -2292,8 +2292,21 @@ case "$command" in
     installer=/usr/local/libexec/gp-control-plane/install-linux.sh
     [ -f "$installer" ] && [ ! -L "$installer" ] && [ "$(readlink -f -- "$installer")" = "$installer" ] &&
       [ "$(stat -c '%u:%g:%a' "$installer")" = '0:0:755' ] || fail "trusted Core installer is unavailable"
-    exec /usr/bin/systemd-run --quiet --scope --unit=gp-control-plane-core-update \
-      /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash "$installer" --prepared-update "$1" "$2"
+    # Leaving the cgroup is insufficient if sudo is still relaying SIGTERM
+    # from the Core service to its child. Fork before creating the fixed scope.
+    /usr/bin/setsid --fork /usr/bin/systemd-run --quiet --scope --unit=gp-control-plane-core-update \
+      /usr/bin/systemd-cat --identifier=gp-core-update \
+      /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash "$installer" --prepared-update "$1" "$2" \
+      </dev/null >/dev/null 2>&1 || fail "could not fork the Core installer"
+    attempts=0
+    while [ "$attempts" -lt 40 ]; do
+      if [ "$(/usr/bin/systemctl show --property=ActiveState --value gp-control-plane-core-update.scope)" = active ]; then
+        exit 0
+      fi
+      attempts=$((attempts + 1))
+      sleep 0.1
+    done
+    fail "Core installer scope did not become active"
     ;;
   check)
     ensure_run_registry

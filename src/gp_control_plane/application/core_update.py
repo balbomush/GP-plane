@@ -51,15 +51,16 @@ def _probe_scope():
         return False
     try:
         check = subprocess.run(
-            ["systemctl", "show", "--property=ActiveState", "--value", _SCOPE],
+            ["/usr/bin/systemctl", "show", "--property=LoadState", "--property=ActiveState", _SCOPE],
             capture_output=True, text=True, timeout=3, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    state = check.stdout.strip()
-    if state in {"active", "activating", "deactivating", "reloading"}:
+    properties = dict(line.split("=", 1) for line in check.stdout.splitlines() if "=" in line)
+    load_state, active_state = properties.get("LoadState"), properties.get("ActiveState")
+    if load_state == "loaded" and active_state in {"active", "activating", "deactivating", "reloading"}:
         return True
-    if state in {"inactive", "failed"}:
+    if load_state in {"loaded", "not-found"} and active_state in {"inactive", "failed"}:
         return False
     return None
 
