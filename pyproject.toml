@@ -23,4 +23,4 @@ where = ["src"]
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 [tool.setuptools.package-data]
-"gp_control_plane.http" = ["openapi.json"]
+"gp_control_plane.http" = ["openapi.json", "openapi-v2.json"]

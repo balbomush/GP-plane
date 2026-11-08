@@ -81,8 +81,11 @@ def register_backups(
 
     def restore_at(upload_size=None):
         restored = False
+        legacy = None
         if upload_size is None and not saved.is_file():
-            raise ApiError(404, "not_found", "Сохранённой копии нет")
+            legacy = user_backup.legacy_saved(state_dir)
+            if legacy is None:
+                raise ApiError(404, "not_found", "Сохранённой копии нет")
         saved.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         stage = Path(mkdtemp(prefix=".user-restore-", dir=saved.parent))
         response = {"restored": True}
@@ -92,7 +95,10 @@ def register_backups(
                 archive = stage / "incoming.zip"
                 _receive(archive, upload_size)
             try:
-                user_backup.restore(state_dir, archive, stage)
+                if legacy is None:
+                    user_backup.restore(state_dir, archive, stage)
+                else:
+                    user_backup.restore_legacy_saved(state_dir, legacy, stage)
             except user_backup.BackupTooLarge as error:
                 raise ApiError(413, "payload_too_large", "Распакованный архив превышает допустимый размер") from error
             except (ValueError, FileNotFoundError, sqlite3.IntegrityError) as error:
@@ -123,7 +129,7 @@ def register_backups(
     def delete():
         no_body()
         with saved_file():
-            saved.unlink(missing_ok=True)
+            user_backup.delete_saved(state_dir)
         return HTTPResponse(status=204, headers={"Cache-Control": "no-store"})
 
     @app.get(_ROOT + "/file")
@@ -137,6 +143,8 @@ def register_backups(
             try:
                 file = stack.enter_context(saved.open("rb"))
             except FileNotFoundError as error:
+                if user_backup.legacy_saved(state_dir) is not None:
+                    raise ApiError(409, "archive_incomplete", "Прежняя копия содержит служебные данные") from error
                 raise ApiError(404, "not_found", "Сохранённой копии нет") from error
             try:
                 user_backup.validate_download(file, saved.parent)

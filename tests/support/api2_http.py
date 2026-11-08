@@ -22,7 +22,7 @@ class Api2HttpFixture:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             self.port = sock.getsockname()[1]
-        runtime = WebHttpRuntime(app, "127.0.0.1", self.port)
+        runtime = self.create_runtime(app)
         thread = threading.Thread(target=runtime.serve_forever, daemon=True)
         thread.start()
 
@@ -41,6 +41,9 @@ class Api2HttpFixture:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.01)
+
+    def create_runtime(self, app):
+        return WebHttpRuntime(app, "127.0.0.1", self.port)
 
     def call(self, method, path, value, token=None, media_type="application/json"):
         headers = {"Content-Type": media_type}

@@ -4,8 +4,10 @@ PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 export PATH
 readonly PATH
 
-CONFIG_FILE="${GP_ROOT_HELPER_CONFIG:-/etc/default/gp-control-plane-root-helper}"
-[ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+if [ "${1:-}" != core-update ]; then
+  CONFIG_FILE="${GP_ROOT_HELPER_CONFIG:-/etc/default/gp-control-plane-root-helper}"
+  [ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+fi
 ZAPRET_DIR="${ZAPRET_DIR:-/opt/zapret2}"
 RUN_REGISTRY_DIR="${GP_ROOT_HELPER_RUN_DIR:-/run/gp-control-plane/runs}"
 DISCOVERY_GATE_DIR='/run/gp-control-plane/gates'
@@ -57,6 +59,9 @@ validate_env_assignment() {
   esac
   key="${1%%=*}"
   case "$key" in
+    GP_API2_TRACE)
+      printf '%s\n' "${1#*=}" | grep -Eq '^[0-9a-f]{32}$' || fail "invalid API 2 trace identity"
+      ;;
     BATCH|DOMAINS|IPVS|TEST|SKIP_DNSCHECK|SKIP_IPBLOCK|ENABLE_HTTP|ENABLE_HTTPS_TLS12|ENABLE_HTTPS_TLS13|ENABLE_HTTP3|SCANLEVEL|REPEATS|PARALLEL|CURL_MAX_TIME|CURL_MAX_TIME_QUIC|CURL_MAX_TIME_DOH|GP_MD_CURL_PARALLELISM|ZAPRET_BASE|ZAPRET_RW) ;;
     *) fail "unsupported env key: $key" ;;
   esac
@@ -523,6 +528,7 @@ run_owned_process() {
   fi
   [ ! -e "$record" ] && [ ! -L "$record" ] || fail "run record exists; recover it before starting a new run"
   command -v setsid >/dev/null 2>&1 || fail "setsid is required for managed runs"
+  exec 7<&0
   setsid /bin/sh -c '
     lock_dir="$1"
     ready_file="$2"
@@ -551,7 +557,7 @@ run_owned_process() {
       fi
       sleep 0.1
     done
-    ( trap - HUP INT TERM; exec "$@" ) &
+    ( trap - HUP INT TERM; exec "$@" <&7 7<&- ) &
     target_pid="$!"
     set +e
     wait "$target_pid"
@@ -664,8 +670,81 @@ run_owned_target() {
   shift
   target="$(validate_run_target "$@")"
   shift
-  run_owned_process "$run_id" "$target" "$@"
+  if [ -n "${GP_API2_TRACE:-}" ]; then
+    run_api2_stock_target "$run_id" "$target" "$@"
+  else
+    run_owned_process "$run_id" "$target" "$@"
+  fi
 }
+
+write_api2_trace() {
+  cat <<'TRACE'
+
+gp_api2_begin()
+{
+  gp_api2_test="$1"
+  shift
+  gp_api2_words="$(printf '%s\0' "--lua-init=@$ZAPRET_BASE/lua/zapret-lib.lua" "--lua-init=@$ZAPRET_BASE/lua/zapret-antidpi.lua" "$@" | base64 -w0)"
+  gp_api2_digest="$(printf '%s\n%s\n%s\n' "$gp_api2_test" "$IPV" "$gp_api2_words" | sha256sum)"
+  gp_api2_digest="${gp_api2_digest%% *}"
+}
+
+gp_api2_record_start()
+{
+  printf 'GP-API2 %s begin %s %s %s\n' "$GP_API2_TRACE" "$gp_api2_digest" "$gp_api2_test" "$gp_api2_words"
+}
+
+gp_api2_record_domain()
+{
+  printf 'GP-API2 %s domain %s %s\n' "$GP_API2_TRACE" "$1" "$2"
+}
+
+gp_api2_record_end()
+{
+  printf 'GP-API2 %s end\n' "$GP_API2_TRACE"
+}
+TRACE
+}
+
+run_api2_stock_target() (
+  run_id="$1"; source="$2"; shift 2
+  stage="$(mktemp -d /tmp/gp-api2-stock.XXXXXX)" || exit 126
+  trap 'rm -f -- "$stage/runner"; rmdir -- "$stage"' EXIT
+  runner="$stage/runner"
+  awk '
+    $0 == "fsleep_setup" { found=1; exit }
+    $0 == "pktws_start()" { print "gp_stock_pktws_start()"; starts++; next }
+    { print }
+    END { if (!found || starts != 1) exit 42 }
+  ' "$source" >"$runner" || exit 126
+  write_api2_trace >>"$runner" || exit 126
+  cat >>"$runner" <<'STOCK' || exit 126
+pktws_start()
+{
+  if [ -n "${gp_stock_test:-}" ]; then
+    gp_api2_begin "$gp_stock_test" "$@"
+    gp_api2_record_start
+    gp_stock_recorded=1
+  fi
+  gp_stock_pktws_start "$@"
+}
+
+pktws_curl_test_update()
+{
+  local gp_stock_test="$1" gp_domain="$2" gp_code gp_stock_recorded=0
+  xxxws_curl_test_update pktws_curl_test "$@"
+  gp_code="$?"
+  if [ "$gp_stock_recorded" = 1 ]; then
+    gp_api2_record_domain "$gp_domain" "$gp_code"
+    gp_api2_record_end
+  fi
+  return "$gp_code"
+}
+STOCK
+  awk '$0 == "fsleep_setup" { found=1 } found { print } END { if (!found) exit 42 }' "$source" >>"$runner" || exit 126
+  chmod 0700 "$runner" || exit 126
+  ( run_owned_process "$run_id" "$runner" "$@" )
+)
 
 write_multidomain_runner() {
   source="$1"
@@ -678,7 +757,37 @@ write_multidomain_runner() {
     printf 'gp-root-helper: unsupported blockcheck2.sh layout: main marker not found\n' >&2
     return 126
   fi
+  write_api2_trace >> "$runner" || return 126
   cat >> "$runner" <<'RUNNER' || return 126
+
+if [ -n "${GP_API2_TRACE:-}" ]; then
+  exec 7<&0
+  exec </dev/null
+fi
+
+gp_api2_replay()
+{
+  [ "${gp_api2_replayed:-0}" = 0 ] || return 2
+  IFS=' ' read -r gp_saved_digest gp_saved_success gp_extra <&7 || {
+    echo 'API 2 replay ended without terminator' >&2
+    cleanup
+    exit 125
+  }
+  if [ "$gp_saved_digest" = end ] && [ -z "$gp_saved_success$gp_extra" ]; then
+    gp_api2_replayed=1
+    return 2
+  fi
+  if [ "$gp_saved_digest" != "$gp_api2_digest" ] || [ -n "$gp_extra" ]; then
+    echo 'API 2 replay position is incompatible' >&2
+    cleanup
+    exit 125
+  fi
+  case "$gp_saved_success" in
+    1) return 0 ;;
+    0) return 1 ;;
+    *) cleanup; exit 125 ;;
+  esac
+}
 
 gp_md_primary_domain()
 {
@@ -760,6 +869,9 @@ gp_md_collect_record()
 	code="$(cat "$codefile" 2>/dev/null)"
 	[ -n "$code" ] || code=1
 
+	if [ -n "${GP_API2_TRACE:-}" ]; then
+		gp_api2_record_domain "$gp_domain" "$code"
+	fi
 	echo "- $testf ipv$IPV $gp_domain : $PKTWSD ${WF:+$WF }$strategy_text"
 	[ -f "$out" ] && cat "$out"
 	rm -f "$out" "$codefile"
@@ -777,9 +889,16 @@ pktws_curl_test_update()
 	# $1 - curl test function
 	# $2 - sample domain from the standard zapret2 script
 	# $3+ - nfqws2 args
-	local testf=$1 dom="$2" strategy ok=0 total=0 gp_domain idx=0 limit active=0 pending record
+	local testf=$1 dom="$2" strategy ok=0 total=0 gp_domain idx=0 limit active=0 pending record gp_replay_status
 	shift
 	shift
+	if [ -n "${GP_API2_TRACE:-}" ]; then
+		gp_api2_begin "$testf" "$@"
+		gp_api2_replay
+		gp_replay_status="$?"
+		[ "$gp_replay_status" = 2 ] || return "$gp_replay_status"
+		gp_api2_record_start
+	fi
 	strategy="$*"
 	limit="$(gp_md_parallel_limit)"
 	rm -f "${PARALLEL_OUT}_md_"*
@@ -817,6 +936,9 @@ pktws_curl_test_update()
 	ws_kill
 	rm -f "${PARALLEL_OUT}_md_"*
 	echo "GP-MULTIDOMAIN result: $ok/$total domains available"
+	if [ -n "${GP_API2_TRACE:-}" ]; then
+		gp_api2_record_end
+	fi
 	[ "$ok" = "$total" ]
 }
 
@@ -880,6 +1002,14 @@ trap - HUP
 trap - PIPE
 trap - INT
 
+if [ -n "${GP_API2_TRACE:-}" ] && [ "${gp_api2_replayed:-0}" = 0 ]; then
+  IFS= read -r gp_last <&7
+  if [ "$gp_last" != end ]; then
+    echo 'API 2 replay contains an unreached position' >&2
+    cleanup
+    exit 125
+  fi
+fi
 cleanup
 RUNNER
   chmod 0700 "$runner" || return 126
@@ -2149,6 +2279,18 @@ command="${1:-}"
 shift
 
 case "$command" in
+  core-update)
+    [ "$#" -eq 2 ] || fail "core-update requires update ID and version"
+    printf '%s\n' "$1" | grep -Eq '^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$' || fail "invalid update UUID"
+    [ "${#2}" -le 64 ] &&
+      printf '%s\n' "$2" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)((a|b|rc)(0|[1-9][0-9]*))?(\.post(0|[1-9][0-9]*))?$' ||
+      fail "invalid update version"
+    installer=/usr/local/libexec/gp-control-plane/install-linux.sh
+    [ -f "$installer" ] && [ ! -L "$installer" ] && [ "$(readlink -f -- "$installer")" = "$installer" ] &&
+      [ "$(stat -c '%u:%g:%a' "$installer")" = '0:0:755' ] || fail "trusted Core installer is unavailable"
+    exec /usr/bin/systemd-run --quiet --scope --unit=gp-control-plane-core-update \
+      /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash "$installer" --prepared-update "$1" "$2"
+    ;;
   check)
     ensure_run_registry
     exit 0

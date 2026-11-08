@@ -173,8 +173,8 @@ class DiscoveryOptions:
             "curl_max_time_doh": self.curl_max_time_doh,
         }
 
-    def to_blockcheck_env(self) -> dict[str, str]:
-        options = self.normalized()
+    def to_blockcheck_env(self, *, validated: bool = False) -> dict[str, str]:
+        options = self if validated else self.normalized()
         return {
             "SKIP_DNSCHECK": "1" if options.skip_dnscheck else "0",
             "SKIP_IPBLOCK": "1" if options.skip_ipblock else "0",
@@ -1487,13 +1487,16 @@ def _root_command_unless_stopped(
 def _run_process_with_live_stdout(
     command: list[str],
     env: dict[str, str],
-    stdout_log: Path,
+    stdout_log: Path | None,
     stderr_log: Path,
     debug_stdout_log: Path | None,
     timeout_seconds: int,
     stop_event: threading.Event | None,
     recorder: _LiveStdoutRecorder,
     run_id: str = "",
+    *,
+    stdin=None,
+    stream_stderr: bool = False,
 ) -> dict[str, Any]:
     if _stop_requested(stop_event):
         return _stopped_process_result(recorder)
@@ -1512,7 +1515,10 @@ def _run_process_with_live_stdout(
                 if debug_stdout_log and stdout_mode == "debug"
                 else None
             )
-            stdout_handle = log_stack.enter_context(_RotatingTextWriter(stdout_log, STDOUT_LOG_MAX_BYTES))
+            stdout_handle = (
+                log_stack.enter_context(_RotatingTextWriter(stdout_log, STDOUT_LOG_MAX_BYTES))
+                if stdout_log is not None else log_stack.enter_context(open(os.devnull, "w", encoding="utf-8"))
+            )
             stderr_handle = log_stack.enter_context(stderr_log.open("w", encoding="utf-8"))
         except Exception:
             if _stop_requested(stop_event):
@@ -1529,8 +1535,9 @@ def _run_process_with_live_stdout(
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    stdin=stdin,
                     stdout=subprocess.PIPE,
-                    stderr=stderr_handle,
+                    stderr=subprocess.STDOUT if stream_stderr else stderr_handle,
                     env=env,
                     start_new_session=hasattr(os, "setsid"),
                 )
@@ -1607,6 +1614,8 @@ def _run_process_with_live_stdout(
                 except subprocess.TimeoutExpired:
                     continue
             reader.join(timeout=5)
+            if reader.is_alive():
+                raise ManagedRuntimeQuarantinedError("managed stdout reader did not terminate")
         finally:
             compact_writer.close()
 

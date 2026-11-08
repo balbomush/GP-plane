@@ -1,6 +1,8 @@
 include openapi.json
+include openapi-v2.json
 include LICENSE
 include THIRD_PARTY_NOTICES.md
 recursive-include scripts *.sh *.py
 recursive-include tests *.py *.json *.mjs *.md
+recursive-include tests/fixtures/api_v2 *.sql *.zip
 include requirements/a5-transport.lock

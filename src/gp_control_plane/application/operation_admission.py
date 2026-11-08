@@ -14,17 +14,23 @@ class OperationAdmission:
     def __init__(self):
         self._lock = Lock()
         self._active: str | None = None
+        self._external = lambda: None
+
+    def set_external(self, probe):
+        with self._lock:
+            self._external = probe
 
     @property
     def active(self) -> str | None:
         with self._lock:
-            return self._active
+            return self._active or self._external()
 
     @contextmanager
     def claim(self, operation: str):
         with self._lock:
-            if self._active is not None:
-                raise OperationBusy(self._active)
+            active = self._active or self._external()
+            if active is not None:
+                raise OperationBusy(active)
             self._active = operation
         try:
             yield

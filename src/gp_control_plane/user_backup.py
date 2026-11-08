@@ -35,6 +35,50 @@ def saved_path(state_dir: Path) -> Path:
     return backups.backups_dir(state_dir) / "user.zip"
 
 
+def legacy_saved(state_dir: Path) -> Path | None:
+    root = backups.snapshots_dir(state_dir)
+    marker = root.parent / "latest.txt"
+    if not marker.is_file() or marker.is_symlink() or root.is_symlink():
+        return None
+    with marker.open(encoding="utf-8") as file:
+        name = file.read(160).strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,120}", name):
+        return None
+    snapshot = root / name
+    return snapshot if snapshot.is_dir() and not snapshot.is_symlink() else None
+
+
+def saved_exists(state_dir: Path) -> bool:
+    return saved_path(state_dir).is_file() or legacy_saved(state_dir) is not None
+
+
+def delete_saved(state_dir: Path) -> None:
+    legacy = legacy_saved(state_dir)
+    if legacy is not None:
+        # Retire the old selection without making another historical snapshot current.
+        (legacy.parent.parent / "latest.txt").unlink(missing_ok=True)
+    saved_path(state_dir).unlink(missing_ok=True)
+
+
+def restore_legacy_saved(state_dir: Path, snapshot: Path, stage: Path) -> None:
+    copy = stage / "legacy"
+    copy.mkdir()
+    total = 0
+    for name in sorted(backups.SNAPSHOT_DOWNLOAD_FILES):
+        source = snapshot / name
+        if not source.is_file() or source.is_symlink() or not source.resolve().is_relative_to(snapshot.resolve()):
+            raise ValueError("Legacy snapshot is incomplete")
+        total += source.stat().st_size
+        if total > _ARCHIVE_LIMIT:
+            raise BackupTooLarge("Legacy snapshot exceeds its limit")
+        output = copy / name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, output)
+    if not backups._verify_snapshot_path(copy):
+        raise ValueError("Legacy snapshot checksum mismatch")
+    _restore_folder(state_dir, copy, stage)
+
+
 def _asset_root(state_dir):
     return state_dir / "strategy-finder" / "assets"
 
@@ -275,6 +319,10 @@ def restore(state_dir: Path, archive, stage: Path) -> None:
         _unpack(archive, folder)
     except BadZipFile as error:
         raise ValueError("Invalid backup ZIP") from error
+    _restore_folder(state_dir, folder, stage)
+
+
+def _restore_folder(state_dir: Path, folder: Path, stage: Path) -> None:
     manifest = backups._read_manifest(folder / "manifest.json")
     if manifest.get("completed") != "true":
         raise ValueError("Incomplete backup")

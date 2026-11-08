@@ -1,24 +1,228 @@
 #!/usr/bin/env bash
-# This script is the sole elevated process of a clean installation.
+# Core installer: ordinary replacement or explicit clean installation.
 set -Eeuo pipefail
 PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 phase=validation
-trap 'printf "ERROR: clean installation failed in phase=%s; before activation previous GP is preserved; after activation use the preserved vault for recovery\n" "$phase" >&2' ERR
-usage() { printf '%s\n' 'usage: install-linux.sh --source-dir DIR --install-user USER (--tag vX.Y.Z|vX.Y.Z-alpha.N | --candidate-sha SHA) --web on|off --initial-install on|off' >&2; exit 64; }
+trap 'printf "ERROR: Core installation failed in phase=%s\n" "$phase" >&2' ERR
+usage() { printf '%s\n' 'usage: install-linux.sh --source-dir DIR --install-user USER (--tag vX.Y.Z|vX.Y.Z-alpha.N | --candidate-sha SHA) --web off --mode ordinary|clean' >&2; exit 64; }
 [ "$(id -u)" -eq 0 ] || fail 'must be run by the bootstrap sudo process'
-SOURCE_DIR= INSTALL_USER= TAG= CANDIDATE_SHA= INSTALL_WEB= INITIAL_INSTALL=
+# Ordinary installation owns only the managed Core program and its venv.
+CORE_UNIT=gp-control-plane-core.service
+find_managed_core() {
+  local service_user exec_start
+  service_user="$(systemctl show -p User --value "$CORE_UNIT")"
+  [[ "$service_user" =~ ^[a-zA-Z0-9_-]+$ && "$service_user" != root ]] || fail 'managed Core service user is unavailable'
+  [ -z "${INSTALL_USER:-}" ] || [ "$INSTALL_USER" = "$service_user" ] || fail 'Core belongs to another install user'
+  INSTALL_USER="$service_user"
+  target_home="$(getent passwd "$INSTALL_USER" | cut -d: -f6)"
+  [ -n "$target_home" ] && [ -d "$target_home" ] && [ "$(readlink -f -- "$target_home")" = "$target_home" ] || fail 'unsafe Core home'
+  gp_root="$target_home/gp"
+  install_dir="$gp_root/GP-access-control-plane"
+  state_parent="$gp_root/.GP-access-control-plane.data"
+  state_dir="$state_parent/state"
+  for managed in "$gp_root" "$install_dir" "$state_parent" "$state_dir"; do
+    [ -d "$managed" ] && [ ! -L "$managed" ] && [ "$(readlink -f -- "$managed")" = "$managed" ] || fail 'unsafe managed Core directory'
+  done
+  [ ! -e "$install_dir/build/state" ] && [ ! -L "$install_dir/build/state" ] || fail 'Core data is inside the old program directory'
+  [ "$(systemctl show -p WorkingDirectory --value "$CORE_UNIT")" = "$install_dir" ] || fail 'Core service does not own this program'
+  exec_start="$(systemctl show -p ExecStart --value "$CORE_UNIT")"
+  [[ "$exec_start" == *"path=$install_dir/.venv/bin/gp-control-plane "* ]] || fail 'unexpected Core service command'
+  [[ "$exec_start" =~ --port[[:space:]]+([0-9]+) ]] || fail 'managed Core port could not be determined'
+  core_port="${BASH_REMATCH[1]}"
+  [ "${#core_port}" -le 5 ] && [ "$((10#$core_port))" -gt 0 ] && [ "$((10#$core_port))" -le 65535 ] || fail 'invalid Core port'
+  [[ "$exec_start" =~ --host[[:space:]]+([^[:space:]\;]+) ]] || fail 'managed Core host could not be determined'
+  case "${BASH_REMATCH[1]}" in
+    0.0.0.0|127.0.0.1) core_host=127.0.0.1 ;;
+    ::|::1) core_host='[::1]' ;;
+    *) fail 'Core listener is outside the managed loopback health probe' ;;
+  esac
+}
+
+core_user() {
+  runuser -u "$INSTALL_USER" -- env -i "PATH=$PATH" "HOME=$target_home" "USER=$INSTALL_USER" "$@"
+}
+
+update_report() {
+  [ -n "${update_id:-}" ] || return 0
+  core_user python3 -I - "$state_dir" "$update_id" "$expected_version" "$1" <<'PYTHON'
+import json, os, pathlib, sys, tempfile
+state, update_id, version, status = sys.argv[1:]
+folder = pathlib.Path(state) / "strategy-finder"
+target = folder / "core-update.json"
+current = json.loads(target.read_text(encoding="utf8"))
+if current["update_id"] != update_id or current["target_version"] != version:
+    raise SystemExit("Core update report no longer owns this installation")
+error = None if status != "failed" else {
+    "code": "installation_failed", "message": "Core installer did not complete",
+}
+fd, stage = tempfile.mkstemp(prefix=".core-update-", dir=folder)
+try:
+    with os.fdopen(fd, "w", encoding="utf8") as stream:
+        json.dump(dict(update_id=update_id, target_version=version, state=status, error=error), stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(stage, target)
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+finally:
+    pathlib.Path(stage).unlink(missing_ok=True)
+PYTHON
+}
+
+prepare_ordinary() {
+  local source="$1" wheel="$2" delivery="$3"
+  core_user /bin/bash -s -- "$install_dir" "$stage" "$venv" "$source" "$wheel" "$delivery" "$expected_version" <<'USER_PREPARE'
+set -Eeuo pipefail
+umask 077
+installed="$1"; stage="$2"; venv="$3"; source="$4"; wheel="$5"; delivery="$6"; version="$7"
+mkdir -- "$stage"
+venv_owned=0
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then rm -rf --one-file-system -- "$stage"; if [ "$venv_owned" = 1 ]; then rm -rf --one-file-system -- "$venv"; fi; fi' EXIT
+if [ -n "$delivery" ]; then
+  bundle="$stage/.delivery"
+  mkdir -- "$bundle"
+  cp -- "$delivery"/SHA256SUMS "$delivery"/gp_access_control_plane-"$version"*.whl \
+     "$delivery"/gp_access_control_plane-"$version".tar.gz "$delivery"/core-*.tar.gz "$bundle"
+  "$installed/.venv/bin/python" -I -c \
+    'from pathlib import Path; import sys; from gp_control_plane.core_supply import _valid_size; _valid_size(Path(sys.argv[1]), sys.argv[2])' \
+    "$bundle" "$version"
+  archives=("$bundle"/core-*.tar.gz)
+  [ "${#archives[@]}" -eq 1 ]
+  tar --extract --gzip --no-same-owner --no-same-permissions --file "${archives[0]}" -C "$stage"
+  wheel="$bundle/gp_access_control_plane-$version-py3-none-any.whl"
+else
+  tar -C "$source" --exclude=.git -cf - . | tar --no-same-owner --no-same-permissions -xf - -C "$stage"
+fi
+[ ! -e "$stage/.venv" ] && [ ! -L "$stage/.venv" ]
+mkdir -- "$venv"
+venv_owned=1
+python3 -m venv "$venv"
+export PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1
+if [ -z "$wheel" ]; then
+  mkdir -- "$stage/.delivery"
+  "$venv/bin/python" -I -m pip wheel --no-deps --wheel-dir "$stage/.delivery" "$stage"
+  wheel="$stage/.delivery/gp_access_control_plane-$version-py3-none-any.whl"
+fi
+"$venv/bin/python" -I -m pip install --only-binary=:all: --require-hashes -r "$stage/requirements/a5-transport.lock"
+"$venv/bin/python" -I -m pip install --no-deps "$wheel"
+"$venv/bin/python" -I -m pip check
+"$venv/bin/python" -I -c 'import sys; from gp_control_plane import __version__; from gp_control_plane.http.api_v2.app import _contract; assert __version__ == sys.argv[1]; assert _contract()' "$version"
+rm -rf -- "$stage/.delivery"
+ln -s -- "$venv" "$stage/.venv"
+USER_PREPARE
+}
+
+activate_ordinary() {
+  systemctl stop "$CORE_UNIT"
+  if systemctl is-active --quiet "$CORE_UNIT"; then fail 'Core did not stop'; fi
+  core_user /bin/bash -s -- "$install_dir" "$stage" "$previous" <<'USER_SWITCH'
+set -Eeuo pipefail
+current="$1"; stage="$2"; previous="$3"
+[ -d "$current" ] && [ ! -L "$current" ] && [ -d "$stage" ] && [ ! -L "$stage" ]
+[ ! -e "$previous" ] && [ ! -L "$previous" ]
+mv -T -- "$current" "$previous"
+if ! mv -T -- "$stage" "$current"; then
+  mv -T -- "$previous" "$current"
+  exit 1
+fi
+USER_SWITCH
+  if [ -n "${manual_helper_source:-}" ]; then
+    install -m 0755 "$manual_helper_source/scripts/gp-root-helper.sh" /usr/local/libexec/gp-control-plane/gp-root-helper.new
+    mv -T -- /usr/local/libexec/gp-control-plane/gp-root-helper.new /usr/local/libexec/gp-control-plane/gp-root-helper
+    install -m 0755 "$manual_helper_source/scripts/install-linux.sh" /usr/local/libexec/gp-control-plane/install-linux.sh.new
+    mv -T -- /usr/local/libexec/gp-control-plane/install-linux.sh.new /usr/local/libexec/gp-control-plane/install-linux.sh
+  fi
+  systemctl start "$CORE_UNIT"
+  local attempt pid
+  for attempt in {1..50}; do
+    pid="$(systemctl show -p MainPID --value "$CORE_UNIT")"
+    if [[ "$pid" =~ ^[1-9][0-9]*$ ]] &&
+       core_user python3 -I - "$core_host" "$core_port" "$pid" "$expected_version" <<'HEALTH'
+import json, sys, urllib.request
+host, port, pid, version = sys.argv[1:]
+request = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with request.open(f"http://{host}:{port}/api/health", timeout=1) as response:
+    if (response.headers.get("X-GP-Core-Pid") != pid
+            or response.headers.get("X-GP-Core-Version") != version
+            or json.loads(response.read(1024)) != {"status": "ok"}):
+        raise SystemExit(1)
+HEALTH
+    then
+      update_report succeeded
+      core_user /bin/bash -s -- "$gp_root" "$previous" <<'USER_CLEAN' || printf '%s\n' 'WARNING: previous program cleanup failed' >&2
+set -Eeuo pipefail
+gp_root="$1"; previous="$2"
+old_venv="$(readlink -- "$previous/.venv" || true)"
+rm -rf --one-file-system -- "$previous"
+if [[ "$old_venv" == "$gp_root"/.gp-core-venv.* ]] &&
+   [[ "${old_venv##*.}" =~ ^[a-f0-9]{32}$ ]] && [ -d "$old_venv" ] && [ ! -L "$old_venv" ]; then
+  rm -rf --one-file-system -- "$old_venv"
+fi
+USER_CLEAN
+      printf '%s\n' 'status=success phase=ordinary-install'
+      return
+    fi
+    sleep 0.2
+  done
+  fail 'new Core version did not pass the managed listener check'
+}
+
+ordinary_install() {
+  find_managed_core
+  local gate_parent=/run/gp-control-plane gate=/run/gp-control-plane/gates
+  for dir in "$gate_parent" "$gate"; do
+    [ ! -L "$dir" ] || fail 'unsafe Core maintenance directory'
+    [ -e "$dir" ] || mkdir -m 0700 -- "$dir"
+    [ -d "$dir" ] && [ "$(stat -c %u -- "$dir")" = 0 ] || fail 'unsafe Core maintenance owner'
+  done
+  [ "$(stat -c '%u:%g:%a' "$gate")" = 0:0:700 ] || fail 'unsafe Core maintenance gate'
+  [ ! -L "$gate/discovery-update.lock" ] || fail 'unsafe Core maintenance lock'
+  [ -e "$gate/discovery-update.lock" ] || ( umask 077; set -C; : >"$gate/discovery-update.lock" )
+  [ -f "$gate/discovery-update.lock" ] && [ "$(stat -c '%u:%g:%a' "$gate/discovery-update.lock")" = 0:0:600 ] || fail 'unsafe Core maintenance lock'
+  exec 9<>"$gate/discovery-update.lock"
+  flock -n -x 9 || fail 'Core discovery or maintenance is active'
+  token="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+  [[ "$token" =~ ^[a-f0-9]{32}$ ]] || fail 'could not allocate an installer identity'
+  stage="$gp_root/.gp-core-stage.$token"
+  venv="$gp_root/.gp-core-venv.$token"
+  previous="$gp_root/.gp-core-previous.$token"
+  phase=ordinary-preparation
+  prepare_ordinary "$@"
+  phase=ordinary-activation
+  activate_ordinary
+}
+
+if [ "${1:-}" = --prepared-update ]; then
+  [ "$#" -eq 3 ] || usage
+  update_id="$2"; expected_version="$3"
+  [[ "$update_id" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]] || fail 'invalid update UUID'
+  [[ "$expected_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)((a|b|rc)(0|[1-9][0-9]*))?(\.post(0|[1-9][0-9]*))?$ ]] || fail 'invalid update version'
+  [ "${#expected_version}" -le 64 ] || fail 'invalid update version length'
+  grep -Eq '/gp-control-plane-core-update\.scope$' /proc/self/cgroup || fail 'installer must run in its managed scope'
+  find_managed_core
+  trap 'rc=$?; if [ "$rc" -ne 0 ]; then update_report failed || true; fi' EXIT
+  core_user "$install_dir/.venv/bin/python" -I -c \
+    'import sys; from gp_control_plane import __version__; from gp_control_plane.application.core_update import version_key; assert version_key(sys.argv[1]) >= version_key(__version__)' "$expected_version"
+  ordinary_install '' '' "$state_dir/strategy-finder/downloads/$expected_version"
+  exit
+fi
+
+SOURCE_DIR= INSTALL_USER= TAG= CANDIDATE_SHA= INSTALL_WEB= INSTALL_MODE=ordinary
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --source-dir|--install-user|--tag|--candidate-sha|--web|--initial-install)
-      [ "$#" -ge 2 ] || usage; value="$2"; case "$1" in --source-dir) SOURCE_DIR="$value";; --install-user) INSTALL_USER="$value";; --tag) TAG="$value";; --candidate-sha) CANDIDATE_SHA="$value";; --web) INSTALL_WEB="$value";; --initial-install) INITIAL_INSTALL="$value";; esac; shift 2 ;;
+    --source-dir|--install-user|--tag|--candidate-sha|--web|--mode)
+      [ "$#" -ge 2 ] || usage; value="$2"; case "$1" in --source-dir) SOURCE_DIR="$value";; --install-user) INSTALL_USER="$value";; --tag) TAG="$value";; --candidate-sha) CANDIDATE_SHA="$value";; --web) INSTALL_WEB="$value";; --mode) INSTALL_MODE="$value";; esac; shift 2 ;;
     *) usage ;;
   esac
 done
 case "$INSTALL_USER" in ''|root|*[!A-Za-z0-9_-]*) fail 'install user is invalid';; esac
 case "$INSTALL_WEB" in on|off) ;; *) fail 'web mode must be on or off';; esac
 [ "$INSTALL_WEB" = off ] || fail 'Core-only installation; install GP Plane Web separately'
-case "$INITIAL_INSTALL" in on|off) ;; *) fail 'initial-install must be on or off';; esac
+case "$INSTALL_MODE" in ordinary|clean) ;; *) fail 'mode must be ordinary or clean';; esac
 [ -d "$SOURCE_DIR/.git" ] && [ ! -L "$SOURCE_DIR" ] || fail 'source directory is unsafe'
 [ -z "$TAG" ] || [ -z "$CANDIDATE_SHA" ] || usage
 [ -n "$TAG" ] || [ -n "$CANDIDATE_SHA" ] || usage
@@ -42,22 +246,20 @@ gp_root="$target_home/gp"; install_dir="$gp_root/GP-access-control-plane"; state
 [ "$target_home" = "$(readlink -f -- "$target_home")" ] && [ ! -L "$target_home" ] || fail 'install-user home is not canonical'
 if [ -e "$gp_root" ] || [ -L "$gp_root" ]; then
   [ -d "$gp_root" ] && [ ! -L "$gp_root" ] && [ "$gp_root" = "$(readlink -f -- "$gp_root")" ] || fail 'managed GP root is not canonical'
-elif [ "$INITIAL_INSTALL" != on ]; then
-  fail 'managed GP root is unavailable for a vault restore'
+else
+  :
 fi
 if [ -e "$install_dir" ] || [ -L "$install_dir" ]; then
   [ -d "$install_dir" ] && [ ! -L "$install_dir" ] && [ "$install_dir" = "$(readlink -f -- "$install_dir")" ] || fail 'managed GP install directory is not canonical'
 fi
-vault_tool="$SOURCE_DIR/scripts/clean-install-vault.py"
-[ -f "$vault_tool" ] && [ ! -L "$vault_tool" ] || fail 'exact tag lacks the vault tool'
-if [ "$INITIAL_INSTALL" = on ]; then
-  for existing_state in "$state_parent" "$install_dir/build/state"; do
-    [ ! -e "$existing_state" ] && [ ! -L "$existing_state" ] || fail 'initial install cannot discard existing data; prepare a vault and use the restore path'
-  done
-fi
-# This executes as the install user; root neither reads nor deletes the vault/handoff.
-if [ "$INITIAL_INSTALL" = off ]; then
-  runuser -u "$INSTALL_USER" -- python3 "$vault_tool" --verify --home "$target_home" >/dev/null || fail 'vault is absent or corrupt; nothing was removed'
+if [ "$INSTALL_MODE" = ordinary ]; then
+  if [ -e "$install_dir" ]; then
+    expected_version="$(core_user python3 -I -c 'from pathlib import Path; import sys,tomllib; print(tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text())["project"]["version"])' "$SOURCE_DIR")"
+    manual_helper_source="$SOURCE_DIR"
+    ordinary_install "$SOURCE_DIR" '' ''
+    exit
+  fi
+  [ ! -e "$state_parent" ] && [ ! -L "$state_parent" ] || fail 'managed state exists without a program; explicit clean installation is required to discard it'
 fi
 # Finish dependency preparation while the old GP is still running. No network
 # or upstream installation script is needed after the destructive boundary.
@@ -125,15 +327,7 @@ else
 fi
 runuser -u "$INSTALL_USER" -- python3 "$SOURCE_DIR/scripts/prepare-zapret2.py" --probe --destination "$zapret_dir"
 python3 "$SOURCE_DIR/scripts/check-core-listener.py" --install-dir "$install_dir" --install-user "$INSTALL_USER"
-# The independent Web is never stopped or removed by Core. Reject an unsupported
-# installed consumer before activation, running its code only as its own user.
-web_root="$gp_root/GP-plane-web"
-if [ -e "$web_root" ] || [ -L "$web_root" ]; then
-  [ -d "$web_root" ] && [ ! -L "$web_root" ] && [ "$(readlink -f -- "$web_root")" = "$web_root" ] || fail 'unsafe independent Web root; nothing stopped'
-  [ -f "$web_root/.gp-web-owned" ] && [ ! -L "$web_root/.gp-web-owned" ] && [ "$(cat "$web_root/.gp-web-owned")" = 'GP Plane Web' ] || fail 'foreign independent Web root; nothing stopped'
-  runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -I -c 'from gp_control_plane.http.docs import openapi_json_bytes; print(openapi_json_bytes().decode("utf-8"))' |
-    runuser -u "$INSTALL_USER" -- "$web_root/.venv/bin/python" -I -c 'import json,sys; from gp_control_plane_web.compatibility import validate_core_contract; validate_core_contract(json.load(sys.stdin))' || fail 'installed Web does not support prepared Core; nothing stopped'
-fi
+# Independent Web files and units are outside the Core installation.
 phase=activation
 stop_unit() {
   local state
@@ -143,9 +337,9 @@ stop_unit() {
     if systemctl is-active --quiet "$1"; then fail 'legacy GP service is still active; files were preserved'; fi
   fi
 }
-stop_unit gp-control-plane-web.service; stop_unit gp-control-plane-core.service
-rm -f -- /etc/systemd/system/gp-control-plane-core.service /etc/systemd/system/gp-control-plane-web.service
-rm -f -- /etc/default/gp-control-plane-install-profile /etc/default/gp-control-plane-core /etc/default/gp-control-plane-web /etc/default/gp-control-plane-root-helper /etc/sudoers.d/gp-control-plane-root-helper
+stop_unit gp-control-plane-core.service
+rm -f -- /etc/systemd/system/gp-control-plane-core.service
+rm -f -- /etc/default/gp-control-plane-core /etc/default/gp-control-plane-root-helper /etc/sudoers.d/gp-control-plane-root-helper
 rm -rf --one-file-system -- /usr/local/libexec/gp-control-plane /run/gp-control-plane "$install_dir" "$state_parent"
 systemctl daemon-reload
 install -d -o "$INSTALL_USER" -g "$group" "$gp_root" "$install_dir"
@@ -166,19 +360,14 @@ runuser -u "$INSTALL_USER" -- python3 -m venv "$install_dir/.venv"
 pip_user "$install_dir/.venv/bin/python" install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
 pip_user "$install_dir/.venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
 pip_user "$install_dir/.venv/bin/python" check
-# The application validates the pending vault ID and performs the semantic and
-# SQLite checks itself. Root only invokes that user-owned operation.
-if [ "$INITIAL_INSTALL" = off ]; then
-  runuser -u "$INSTALL_USER" -- "$install_dir/.venv/bin/python" "$vault_tool" --restore --target-state-dir "$state_dir" --home "$target_home" \
-    || fail 'clean-install vault restore failed; vault was preserved and services were not started'
-fi
 # The v2fly cache is disposable service data.  A network failure must not undo a
 # successful clean install: the authenticated Web action can retry it later.
 if ! runuser -u "$INSTALL_USER" -- env GP_STATE_DIR="$state_dir" "$install_dir/.venv/bin/gp-control-plane" domain-sources prepare-v2fly; then
   printf '%s\n' 'WARNING: v2fly catalog was not prepared; start the service and retry from the Web interface.' >&2
 fi
 install -d -m 0755 /usr/local/libexec/gp-control-plane
-install -m 0755 "$install_dir/scripts/gp-root-helper.sh" /usr/local/libexec/gp-control-plane/gp-root-helper
+install -m 0755 "$SOURCE_DIR/scripts/gp-root-helper.sh" /usr/local/libexec/gp-control-plane/gp-root-helper
+install -m 0755 "$SOURCE_DIR/scripts/install-linux.sh" /usr/local/libexec/gp-control-plane/install-linux.sh
 cat > /etc/default/gp-control-plane-root-helper <<EOF
 # Managed by the GP clean installer, consumed by the existing root helper.
 ZAPRET_DIR='$zapret_dir'
