@@ -22,11 +22,11 @@ def shell_path(path: Path) -> str:
 class PreparedPackageVersionTests(unittest.TestCase):
     def test_installer_executes_source_package_and_metadata_version_check(self):
         script = (ROOT / "scripts/install-linux.sh").read_text(encoding="utf-8")
-        lines = [line for line in script.splitlines() if line.startswith("runuser ") and " -c " in line]
+        lines = [line for line in script.splitlines() if line.startswith("core_user ") and "importlib.metadata" in line]
         self.assertEqual(len(lines), 1)
         arguments = shlex.split(lines[0])
         code = arguments[arguments.index("-c") + 1]
-        self.assertEqual(arguments[-1], "$SOURCE_DIR")
+        self.assertEqual(arguments[-1], "$expected_version")
         self.assertLess(script.index(lines[0]), script.index("phase=activation"))
         for source, package, metadata, docs, success in (
             ("0.4.3", "0.4.3", "0.4.3", True, True),
@@ -38,22 +38,18 @@ class PreparedPackageVersionTests(unittest.TestCase):
         ):
             with self.subTest(source=source, package=package, metadata=metadata, docs=docs), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
-                (root / "pyproject.toml").write_text(f'[project]\nversion = "{source}"\n', encoding="utf-8")
-                (root / "bottle.py").write_text("", encoding="utf-8")
-                (root / "cheroot.py").write_text("", encoding="utf-8")
-                web = root / "gp_control_plane/web"
-                web.mkdir(parents=True)
-                (web.parent / "__init__.py").write_text(f'__version__ = "{package}"\n', encoding="utf-8")
-                (web / "__init__.py").write_text("", encoding="utf-8")
-                (web / "docs.py").write_text(f'def openapi_json_bytes():\n    return {b"{}" if docs else b""!r}\n', encoding="utf-8")
+                api = root / "gp_control_plane/http/api_v2"
+                api.mkdir(parents=True)
+                (root / "gp_control_plane/__init__.py").write_text(f'__version__ = "{package}"\n', encoding="utf-8")
+                (api / "app.py").write_text(f'def _contract():\n    return {b"{}" if docs else b""!r}\n', encoding="utf-8")
                 dist = root / "gp_access_control_plane.dist-info"
                 dist.mkdir()
                 (dist / "METADATA").write_text(f'Name: gp-access-control-plane\nVersion: {metadata}\n', encoding="utf-8")
-                result = subprocess.run([sys.executable, "-I", "-B", "-c", "import sys; sys.path.insert(0, sys.argv[1]); " + code, str(root)],
+                result = subprocess.run([sys.executable, "-I", "-B", "-c", "import sys; sys.path.insert(0, sys.argv.pop(1)); " + code, str(root), source],
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode == 0, success, result.stderr)
                 if not success:
-                    self.assertIn("ERROR: prepared GP", result.stderr)
+                    self.assertIn("AssertionError", result.stderr)
 
 
 @unittest.skipUnless(BASH, "bash is required")
@@ -98,6 +94,8 @@ runuser() {
     *" -m pip wheel "*) [ "$TEST_FAIL" != wheel ]; return;;
     *" -m pip install "*) [ "$TEST_FAIL" != package ]; return;;
     *" -m pip check"*) [ "$TEST_FAIL" != dependency-check ]; return;;
+    *" /bin/bash -s "*) cat >/dev/null; return 0;;
+    *"import sys,tomllib"*) printf '0.5.0\n'; return 0;;
     *" -c "*)
       if [ "$TEST_FAIL" = import ]; then return 62; fi
       # Successful preparation stops here, before any /opt or activation work.
@@ -111,7 +109,7 @@ rm() {
   case "$*" in *"$TEST_TMP/preparation."*) command rm "$@";;
     *) event FORBIDDEN-removal; return 99;; esac
 }
-source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 0000000000000000000000000000000000000001 --web off --initial-install off
+source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 0000000000000000000000000000000000000001 --web off --mode clean
 '''
         for failure in ("apt", "network", "checksum", "archive", "architecture", "runtime", "venv", "lock-copy", "dependencies", "dependency-checksum", "dependency-missing", "dependency-check", "wheel", "package", "import", "none"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
@@ -121,7 +119,6 @@ source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 00
                 (old / "settings.ini").write_bytes(b"existing settings")
                 (state / "user-data").write_bytes(b"existing user data")
                 (source / ".git").mkdir(parents=True); (source / "scripts").mkdir()
-                (source / "scripts/clean-install-vault.py").write_text("# fixture", encoding="utf-8")
                 (source / "requirements").mkdir()
                 shutil.copyfile(ROOT / "requirements/a5-transport.lock", source / "requirements/a5-transport.lock")
                 events = root / "events"

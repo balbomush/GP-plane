@@ -3346,9 +3346,9 @@ def _start_captured_server(
         "gp_control_plane.http.core_server",
     }:
         # A6 moves the Core listener onto the same explicit Cheroot runtime as
-        # Web.  This test-only lifecycle owner exercises the real public Core
-        # factory instead of preserving a parallel BaseHTTP test listener.
-        from gp_control_plane.web.core_runtime import create_core_runtime
+        # Web.  This test-only lifecycle owner exercises the retired API 1
+        # factory on the shared transport for legacy subsystem regressions.
+        from tests.support.api1_runtime import create_core_runtime
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
             reservation.bind(("127.0.0.1", 0))

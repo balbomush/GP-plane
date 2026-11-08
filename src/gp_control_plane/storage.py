@@ -260,6 +260,11 @@ def connect(
         )
         conn.row_factory = sqlite3.Row
         migration_key = path.resolve()
+        if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='meta'").fetchone():
+            installed = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if installed and installed[0].isdigit() and int(installed[0]) > SCHEMA_VERSION:
+                conn.close()
+                raise ValueError("Legacy storage command cannot operate on API 2 data")
         with _MIGRATION_LOCK:
             if migration_key not in _MIGRATED_DB_PATHS:
                 conn.execute("PRAGMA journal_mode=WAL")

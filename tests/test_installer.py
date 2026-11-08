@@ -16,29 +16,16 @@ class CleanInstallerTests(unittest.TestCase):
         cls.hardware_bootstrap = (root / "scripts" / "hardware-candidate-bootstrap.sh").read_text(encoding="utf-8")
         cls.installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")
 
-    def test_user_flow_accepts_only_exact_annotated_tag_and_one_sudo(self) -> None:
+
+    def test_user_flow_accepts_only_exact_annotated_tag_and_one_sudo(self):
         self.assertIn('TAG="${GP_BRANCH:-}"', self.bootstrap)
-        self.assertIn("exact annotated stable or alpha release tag", self.bootstrap)
-        self.assertIn("^v[0-9]+\\.[0-9]+\\.[0-9]+(-alpha\\.[1-9][0-9]*)?$", self.bootstrap)
+        self.assertIn('INSTALL_MODE="${GP_INSTALL_MODE:-ordinary}"', self.bootstrap)
+        self.assertIn('case "$INSTALL_MODE" in ordinary|clean)', self.bootstrap)
         self.assertIn('cat-file -t "refs/tags/$TAG"', self.bootstrap)
-        self.assertIn('python3 "$source_dir/scripts/clean-install-vault.py"', self.bootstrap)
-        self.assertEqual(self.bootstrap.count("sudo --"), 1)
         self.assertIn('git -C "$source_dir" status --porcelain', self.bootstrap)
-        self.assertIn('v040_checkout_state="$HOME/gp/GP-access-control-plane/build/state"', self.bootstrap)
-        self.assertIn('v040_data_state="$HOME/gp/.GP-access-control-plane.data/state"', self.bootstrap)
-        self.assertIn('both supported v0.4 state sources exist', self.bootstrap)
-        self.assertIn('canonical v0.4 state is not a non-symlink directory', self.bootstrap)
-        self.assertIn('canonical v0.4 state has an invalid layout', self.bootstrap)
-        self.assertIn('canonical v0.4 strategy-finder is not a non-symlink directory', self.bootstrap)
-        self.assertIn('canonical v0.4 strategy-finder path escapes state', self.bootstrap)
-        self.assertIn('verify_vault() {', self.bootstrap)
-        self.assertIn('--verify --state-dir "$1" --home "$HOME"', self.bootstrap)
-        self.assertIn('if verify_vault "$v040_state" 2>/dev/null; then', self.bootstrap)
-        self.assertIn('elif verify_vault "$v040_data_state" 2>/dev/null; then', self.bootstrap)
-        self.assertIn('verify_vault "$v040_state"\n', self.bootstrap)
-        self.assertIn('initial_install=on', self.bootstrap)
-        self.assertIn('--initial-install "$initial_install"', self.bootstrap)
-        for forbidden in ("latest-stable", "refs/heads", "GP_EXPECTED_SHA", "candidate", "rollback", "clean-remove"):
+        self.assertEqual(self.bootstrap.count("sudo --"), 1)
+        self.assertIn('--tag "$TAG" --web off --mode "$INSTALL_MODE"', self.bootstrap)
+        for forbidden in ("latest-stable", "refs/heads", "GP_EXPECTED_SHA", "candidate", "rollback", "clean-remove", "vault"):
             self.assertNotIn(forbidden, self.bootstrap)
 
     def test_bootstrap_accepts_only_stable_or_positive_alpha_tags_before_python_or_sudo(self) -> None:
@@ -71,20 +58,14 @@ class CleanInstallerTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     calls = log.read_text(encoding="utf-8").splitlines()
                     self.assertIn("GIT", calls)
-                    python_calls = [call for call in calls if call.startswith("PYTHON:")]
-                    self.assertEqual(len(python_calls), 1, calls)
-                    self.assertIn("--verify --state-dir", python_calls[0])
-                    self.assertIn(
-                        f"--state-dir {bash_path(sandbox / 'home' / 'gp' / '.GP-access-control-plane.data' / 'state')}",
-                        python_calls[0],
-                    )
+                    self.assertFalse(any(call.startswith("PYTHON:") for call in calls), calls)
                     self.assertEqual(calls[-1], "SUDO")
             for tag in ("v0.4.1-alpha.0", "v0.4.1-alpha.-1", "v0.4.1-alpha.01", "v0.4.1-beta.1", "v0.4.1-rc.1", "main", "v0.4.1^{commit}"):
                 with self.subTest(rejected=tag):
                     if log.exists(): log.unlink()
                     result = subprocess.run(invoke, env={**os.environ, "HOME": bash_path(sandbox / "home"), "GP_BRANCH": tag, "TEST_LOG": bash_path(log)}, capture_output=True, text=True)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("exact release tag", result.stderr)
+                    self.assertIn("exact annotated release tag", result.stderr)
                     self.assertFalse(log.exists(), "malformed tag must stop before git, Python, sudo, or removal")
             if log.exists(): log.unlink()
             lightweight = subprocess.run(
@@ -108,8 +89,8 @@ class CleanInstallerTests(unittest.TestCase):
         self.assertNotIn("GP_REPO_URL", self.hardware_bootstrap)
         self.assertNotIn("hardware-candidate-bootstrap", (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8"))
 
-    def test_both_bootstraps_support_exactly_one_v040_state_source(self) -> None:
-        for bootstrap in (self.bootstrap, self.hardware_bootstrap):
+    def test_historical_hardware_bootstrap_supports_exactly_one_v040_state_source(self) -> None:
+        for bootstrap in (self.hardware_bootstrap,):
             self.assertIn('v040_checkout_state="$HOME/gp/GP-access-control-plane/build/state"', bootstrap)
             self.assertIn('v040_data_state="$HOME/gp/.GP-access-control-plane.data/state"', bootstrap)
             self.assertIn('--state-dir "$v040_state" --home "$HOME"', bootstrap)
@@ -119,54 +100,24 @@ class CleanInstallerTests(unittest.TestCase):
             self.assertIn('verify_vault "$v040_state"\n', bootstrap)
             self.assertIn('both supported v0.4 state sources exist', bootstrap)
 
-    def test_root_process_verifies_vault_before_fixed_removal_and_installs_both_topologies(self) -> None:
-        verify = self.installer.index('runuser -u "$INSTALL_USER" -- python3 "$vault_tool" --verify')
+
+    def test_explicit_clean_prepares_runtime_and_package_before_core_activation(self):
+        zapret = self.installer.index('bash "$SOURCE_DIR/scripts/install-zapret2.sh" --prepare-dir')
+        probe = self.installer.index('--probe --destination "$prepare_dir/runtime"')
+        package = self.installer.index('assert __version__ == sys.argv[1] == version')
+        stop = self.installer.index('stop_unit gp-control-plane-core.service')
         removal = self.installer.index('rm -rf --one-file-system -- /usr/local/libexec/gp-control-plane')
-        restore = self.installer.index('"$install_dir/.venv/bin/python" "$vault_tool" --restore --target-state-dir "$state_dir" --home "$target_home"')
-        prepare = self.installer.index('domain-sources prepare-v2fly')
-        first_service_start = self.installer.index('systemctl daemon-reload; systemctl enable --now gp-control-plane-core.service')
-        self.assertLess(verify, removal)
-        self.assertLess(removal, restore)
-        self.assertLess(restore, prepare)
-        self.assertLess(restore, first_service_start)
-        restore_guard = self.installer.index('# The application validates the pending vault ID')
-        restore_guard_end = self.installer.index('\nfi\n', restore_guard)
-        self.assertIn('if [ "$INITIAL_INSTALL" = off ]; then', self.installer[restore_guard:restore_guard_end])
-        self.assertIn('--restore --target-state-dir "$state_dir"', self.installer[restore_guard:restore_guard_end])
-        self.assertNotIn('systemctl enable --now', self.installer[restore_guard:restore_guard_end])
-        self.assertIn('gp-control-plane-core.service', self.installer)
+        start = self.installer.index('systemctl daemon-reload; systemctl enable --now "$CORE_UNIT"')
+        self.assertEqual(sorted((zapret, probe, package, stop, removal, start)),
+                         [zapret, probe, package, stop, removal, start])
+        self.assertIn('case "$INSTALL_MODE" in ordinary|clean)', self.installer)
         self.assertIn('[ "$INSTALL_WEB" = off ] || fail', self.installer)
-        self.assertNotIn('cat > /etc/systemd/system/gp-control-plane-web.service', self.installer)
-        self.assertIn('git -C "$SOURCE_DIR" status --porcelain', self.installer)
-        self.assertIn('managed GP root is not canonical', self.installer)
-        self.assertIn('gp-control-plane-root-helper', self.installer)
-        self.assertIn('case "$INITIAL_INSTALL" in on|off)', self.installer)
-        self.assertIn('if [ "$INITIAL_INSTALL" = off ]; then', self.installer)
-        self.assertIn('python3 "$vault_tool" --verify --home "$target_home"', self.installer)
-        self.assertEqual(self.installer.count('--restore --target-state-dir "$state_dir"'), 1)
         self.assertIn('visudo -cf /etc/sudoers.d/gp-control-plane-root-helper', self.installer)
-        self.assertIn('scripts/install-zapret2.sh', self.installer)
-        zapret_prepare = self.installer.index('bash "$SOURCE_DIR/scripts/install-zapret2.sh" --prepare-dir')
-        runtime_probe = self.installer.index('--probe --destination "$prepare_dir/runtime"')
-        package_probe = self.installer.index('openapi_json_bytes() or sys.exit("ERROR: prepared GP OpenAPI document is empty")')
-        service_stop = self.installer.index('stop_unit gp-control-plane-web.service')
-        self.assertLess(verify, zapret_prepare)
-        self.assertLess(zapret_prepare, runtime_probe)
-        self.assertLess(runtime_probe, package_probe)
-        self.assertLess(package_probe, service_stop)
-        self.assertLess(service_stop, removal)
         self.assertIn('/usr/local/libexec/gp-control-plane/nfqws2', self.installer)
         self.assertIn('/usr/local/libexec/gp-control-plane/blockcheck2.sh', self.installer)
         self.assertIn('Environment=PATH=/usr/local/libexec/gp-control-plane:', self.installer)
-        self.assertNotIn('/usr/local/bin/nfqws2', self.installer)
-        self.assertNotIn('/usr/local/bin/blockcheck2.sh', self.installer)
-        self.assertNotIn('rm -rf --one-file-system -- /usr/local/bin', self.installer)
-        self.assertNotIn('rm -f -- /usr/local/bin', self.installer)
-        self.assertNotIn("\nsudo ", self.installer)
-        self.assertIn("--candidate-sha", self.installer)
-        self.assertIn("candidate SHA must be a full lowercase commit SHA", self.installer)
-        self.assertIn("source checkout does not match the exact candidate SHA", self.installer)
-        for forbidden in ("adapter", "provision", "preflight", "manifest", "rollback", "snapshot"):
+        for forbidden in ('vault_tool', 'stop_unit gp-control-plane-web.service',
+                          'systemctl stop gp-web.service', '/usr/local/bin/nfqws2', '/usr/local/bin/blockcheck2.sh'):
             self.assertNotIn(forbidden, self.installer)
 
     def test_installer_persists_only_the_validated_tag_or_candidate_identity(self) -> None:
@@ -206,71 +157,25 @@ class CleanInstallerTests(unittest.TestCase):
             self.installer,
         )
 
-    def test_installer_prepares_v2fly_once_as_install_user_without_blocking_service_start(self) -> None:
-        prepare = 'runuser -u "$INSTALL_USER" -- env GP_STATE_DIR="$state_dir" "$install_dir/.venv/bin/gp-control-plane" domain-sources prepare-v2fly'
-        pip_install = 'pip_user "$install_dir/.venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane'
-        first_service_start = 'systemctl daemon-reload; systemctl enable --now gp-control-plane-core.service'
 
-        self.assertEqual(self.installer.count(prepare), 1)
-        self.assertLess(self.installer.index(pip_install), self.installer.index(prepare))
-        self.assertLess(self.installer.index('--restore --target-state-dir "$state_dir"'), self.installer.index(prepare))
-        self.assertLess(self.installer.index(prepare), self.installer.index(first_service_start))
-        self.assertIn(f'if ! {prepare}; then', self.installer)
-        self.assertIn('WARNING: v2fly catalog was not prepared; start the service and retry from the Web interface.', self.installer)
-        prepare_block_start = self.installer.index(f'if ! {prepare}; then')
-        prepare_block_end = self.installer.index('\nfi\n', prepare_block_start)
-        self.assertNotIn('sudo', self.installer[prepare_block_start:prepare_block_end])
+    def test_ordinary_update_prepares_before_switch_and_checks_listener_before_deletion(self):
+        ordinary = self.installer.split("ordinary_install() {", 1)[1].split("\n}", 1)[0]
+        self.assertLess(ordinary.index('prepare_ordinary "$@"'), ordinary.index("activate_ordinary"))
+        self.assertLess(ordinary.index("lock_maintenance"), ordinary.index('prepare_ordinary "$@"'))
+        activation = self.installer.split("activate_ordinary() {", 1)[1].split("\n}", 1)[0]
+        self.assertLess(activation.index('systemctl stop "$CORE_UNIT"'), activation.index('mv -T -- "$current" "$previous"'))
+        self.assertLess(activation.index('systemctl start "$CORE_UNIT"'), activation.index("wait_core_listener"))
+        self.assertLess(activation.index("wait_core_listener"), activation.index("update_report succeeded"))
+        self.assertLess(activation.index("update_report succeeded"), activation.index('rm -rf --one-file-system -- "$previous"'))
+        self.assertNotIn("pip ", activation)
 
-    def test_v2fly_prepare_failure_is_best_effort_and_reaches_the_core_service_start(self) -> None:
-        git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
-        bash = shutil.which("bash") or (str(git_bash) if git_bash.is_file() else None)
-        if not bash:
-            self.skipTest("bash is required")
-        start = self.installer.index("# The v2fly cache is disposable service data.")
-        end = self.installer.index("install -d -m 0755 /usr/local/libexec/gp-control-plane", start)
-        v2fly_block = self.installer[start:end]
-        with tempfile.TemporaryDirectory() as raw:
-            sandbox = Path(raw)
-            fake_bin = sandbox / "bin"
-            fake_bin.mkdir()
-            log = sandbox / "calls.log"
 
-            def bash_path(path: Path) -> str:
-                value = path.resolve().as_posix()
-                return f"/{value[0].lower()}{value[2:]}" if len(value) > 2 and value[1] == ":" else value
-
-            for name, body in {
-                "runuser": 'printf "runuser:%s\\n" "$*" >> "$TEST_LOG"\nexit 42\n',
-                "systemctl": 'printf "systemctl:%s\\n" "$*" >> "$TEST_LOG"\n',
-            }.items():
-                path = fake_bin / name
-                path.write_text("#!/usr/bin/env bash\nset -eu\n" + body, encoding="utf-8")
-                path.chmod(0o755)
-            result = subprocess.run(
-                [
-                    bash,
-                    "--noprofile",
-                    "--norc",
-                    "-c",
-                    'PATH="$1:/usr/bin:/bin"; export PATH; exec bash -c "$2"',
-                    "bash",
-                    bash_path(fake_bin),
-                    v2fly_block + 'systemctl enable --now gp-control-plane-core.service\n',
-                ],
-                env={
-                    **os.environ,
-                    "TEST_LOG": bash_path(log),
-                    "INSTALL_USER": "gpuser",
-                    "state_dir": bash_path(sandbox / "state"),
-                    "install_dir": bash_path(sandbox / "install"),
-                },
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("WARNING: v2fly catalog was not prepared", result.stderr)
-            self.assertEqual(log.read_text(encoding="utf-8").splitlines()[-1], "systemctl:enable --now gp-control-plane-core.service")
-            self.assertIn("GP_STATE_DIR=", log.read_text(encoding="utf-8"))
+    def test_core_health_proof_uses_both_version_and_systemd_pid(self):
+        probe = self.installer.split("wait_core_listener() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn('systemctl show -p MainPID --value "$CORE_UNIT"', probe)
+        self.assertIn('response.headers.get("X-GP-Core-Pid") != pid', probe)
+        self.assertIn('response.headers.get("X-GP-Core-Version") != version', probe)
+        self.assertIn('fail \'new Core version did not pass the managed listener check\'', probe)
 
     def test_retired_transition_entrypoints_are_absent(self) -> None:
         root = Path(__file__).resolve().parents[1] / "scripts"
@@ -322,7 +227,7 @@ class CleanInstallerTests(unittest.TestCase):
                 ("checkout", Path("gp") / "GP-access-control-plane" / "build" / "state"),
                 ("data", Path("gp") / ".GP-access-control-plane.data" / "state"),
             ):
-                for script in ("bootstrap-linux.sh", "hardware-candidate-bootstrap.sh"):
+                for script in ("hardware-candidate-bootstrap.sh",):
                     with self.subTest(source_kind=source_kind, script=script):
                         home = sandbox / f"home-{source_kind}-{script}"
                         log = sandbox / f"{source_kind}-{script}.log"
@@ -350,7 +255,7 @@ class CleanInstallerTests(unittest.TestCase):
                         self.assertTrue(all(f"--state-dir {bash_path(v040_state)}" in call for call in calls if call.startswith("VERIFY:")), calls)
                         self.assertTrue(all("--initial-install off" in call for call in calls if call.startswith("SUDO:")), calls)
 
-    def test_unsafe_or_ambiguous_v040_state_stops_before_sudo_for_both_bootstraps(self) -> None:
+    def test_historical_hardware_bootstrap_stops_for_unsafe_v040_state(self) -> None:
         git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
         bash = shutil.which("bash") or (str(git_bash) if git_bash.is_file() else None)
         if not bash:
@@ -377,7 +282,7 @@ class CleanInstallerTests(unittest.TestCase):
             fake("sudo", 'echo SUDO >> "$TEST_LOG"; exit 64\n')
 
             for kind in ("symlink", "file", "missing-strategy-finder", "missing-database", "strategy-finder-symlink", "database-symlink", "both-sources"):
-                for script in ("bootstrap-linux.sh", "hardware-candidate-bootstrap.sh"):
+                for script in ("hardware-candidate-bootstrap.sh",):
                     with self.subTest(kind=kind, script=script):
                         home = sandbox / f"home-{kind}-{script}"
                         v040_state = home / "gp" / ".GP-access-control-plane.data" / "state"

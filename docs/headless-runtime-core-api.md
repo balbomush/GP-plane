@@ -1,5 +1,7 @@
 # Headless Runtime / Core API
 
+> Историческое описание API 1 и split-runtime. Для текущего API 2, запуска и установки см. [README](../README.md) и [OpenAPI](../openapi-v2.json).
+
 Статус: alpha-этап split-runtime. В feature-ветке добавлены API-only команда `gp-control-plane core`, proxy-режим `gp-control-plane web --core-url ...` и installer-flow, который по умолчанию поднимает Core service и Web proxy service.
 
 Постоянный API-контракт первого уровня находится в [`../openapi.json`](../openapi.json). При изменении API этот файл должен обновляться вместе с кодом.

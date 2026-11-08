@@ -1,5 +1,11 @@
 # Test ownership after Core/Web split
 
+API 2 production HTTP, authentication, storage and installed Core are tested by
+`test_api_v2_*` and the Linux acceptance runner. API 1 subsystem regressions
+use `tests.support.api1_runtime` with their own v11 fixtures. That factory has
+no production entrypoint. Old pair qualification remains evidence for the
+pinned API 1 Core/Web pair.
+
 Baseline: GP v0.4.4 `66b5898d6c30544df00d928126ecc5a38ea6fffc`;
 accepted S2A Core `9a69754d8093fb4b6084d5de88219772284add67`.
 The previous mixed UI test files are replaced by the owners below. Their exact

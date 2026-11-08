@@ -55,7 +55,7 @@ def _serve_core_in_process(
 
     config = AppConfig(output=OutputConfig(state_dir=Path(state_dir_raw)))
     try:
-        from gp_control_plane.web.core_runtime import create_core_runtime
+        from tests.support.api1_runtime import create_core_runtime
 
         runtime = create_core_runtime(config, "127.0.0.1", port, ui_enabled=False)
         thread = threading.Thread(target=runtime.serve_forever, name="auth-core-cheroot", daemon=True)
@@ -142,7 +142,7 @@ def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _M
         "gp_control_plane.http.api_server",
         "gp_control_plane.http.core_server",
     }:
-        from gp_control_plane.web.core_runtime import create_core_runtime
+        from tests.support.api1_runtime import create_core_runtime
 
         runtime = create_core_runtime(
             config,

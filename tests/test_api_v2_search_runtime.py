@@ -1,12 +1,16 @@
 """Run acceptance, Stop selection, and GP checkpoint on the HTTP controller."""
 
+from concurrent.futures import ThreadPoolExecutor
+import json
 from threading import Event
+from uuid import uuid4
 from time import monotonic, sleep
 import unittest
 
 from gp_control_plane.application.api2_search import SearchController
 from gp_control_plane.application.operation_admission import OperationAdmission
 from gp_control_plane.http.api_v2.app import create_api2_app
+from gp_control_plane.http.api_v2.search_input import validate_start
 from gp_control_plane.http.http_runtime import WebHttpRuntime
 from gp_control_plane.storage import connect_api2
 from tests.support.api2_http import Api2HttpFixture
@@ -90,3 +94,42 @@ class Api2SearchRuntimeTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([entry["message"] for entry in following["entries"]], ["after restart"])
         self.assertFalse(following["truncated"])
+
+    def test_resume_rechecks_milestone_after_environment_preparation(self):
+        prefix = "/api/v2"
+        _, _, login = self.call("POST", prefix + "/access/authentication",
+                                {"username": "admin", "password": "admin"})
+        token = login["bearer_token"]
+        run_id = uuid4().hex
+        spec, errors = validate_start("blockcheck2-gp", {"domains": ["test.example"]})
+        self.assertFalse(errors)
+        with connect_api2(self.state) as conn:
+            conn.execute(
+                """INSERT INTO runs(id, milestone_id, engine_id, status, parameters_json, domains_json, checkpoint_json)
+                   VALUES(?, 1, 2, 'stopped', ?, ?, ?)""",
+                (run_id, json.dumps(spec["parameters"]), json.dumps(spec["domains"]),
+                 json.dumps({"revision": "fixture-v1", "trail": [["a" * 64, True]]})),
+            )
+            before = tuple(conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone())
+        prepared, release = Event(), Event()
+
+        def wait_for_test(code, parameters):
+            prepared.set()
+            if not release.wait(5):
+                raise RuntimeError("readiness fixture timed out")
+            return "fixture-v1"
+
+        self.engine.prepare = wait_for_test
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self.call, "POST",
+                                     prefix + f"/engines/blockcheck2-gp/runs/{run_id}/resume", b"", token)
+            try:
+                self.assertTrue(prepared.wait(3))
+                self.assertEqual(self.call("POST", prefix + "/data/milestones", b"", token)[2], {"id": 2})
+            finally:
+                release.set()
+            status, _, body = future.result(5)
+        self.assertEqual((status, body["error"]["code"]), (409, "milestone_conflict"))
+        with connect_api2(self.state) as conn:
+            self.assertEqual(tuple(conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()), before)
+        self.assertEqual(self.engine.executions, [])

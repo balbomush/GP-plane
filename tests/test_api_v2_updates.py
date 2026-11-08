@@ -1,5 +1,6 @@
 """Update acceptance persists correlation before invoking the fixed launcher."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -51,6 +52,37 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(recovered.start(FIRST, "0.5.0")[1]["state"], "unknown")
             self.assertEqual(launches, [(FIRST, "0.5.0")])
             self.assertEqual(preparations, ["0.5.0"])
+
+    def test_delayed_same_id_cannot_start_second_installer_after_first_finishes(self):
+        from threading import current_thread
+
+        entered, release = Event(), Event()
+        launches = []
+        done = Event()
+        done.set()
+
+        def prepare(state, version):
+            if current_thread().name.startswith("stale-update"):
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("stale request was not released")
+            return 1
+
+        with TemporaryDirectory() as root:
+            state = Path(root)
+            manager = CoreUpdate(state, OperationAdmission(), prepare=prepare,
+                                 launch=lambda *args: launches.append(args) or done, probe=lambda: False)
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stale-update") as executor:
+                delayed = executor.submit(manager.start, FIRST, "0.5.0")
+                try:
+                    self.assertTrue(entered.wait(3))
+                    self.assertEqual(manager.start(FIRST, "0.5.0")[0], 202)
+                    manager._worker.join(3)
+                    self.assertFalse(manager._worker.is_alive())
+                finally:
+                    release.set()
+                self.assertEqual(delayed.result(5)[0], 200)
+            self.assertEqual(launches, [(FIRST, "0.5.0")])
 
     def test_confirmed_launcher_failure_leaves_a_terminal_report(self):
         class RejectedLaunch:
