@@ -125,9 +125,14 @@ class ServiceTests(Api2HttpFixture, unittest.TestCase):
             (WHEEL, _wheel({f"{INFO}/METADATA": metadata})),
             (WHEEL, _wheel({name: content for name, content in MEMBERS.items()
                             if name != f"{INFO}/entry_points.txt"})),
+            (WHEEL, _wheel({**MEMBERS, f"{INFO}/entry_points.txt":
+                            b"[DEFAULT]\ngp-control-plane=gp_control_plane.cli:main\n[console_scripts]\n"})),
+            (WHEEL, _wheel({**MEMBERS, f"{INFO}/entry_points.txt":
+                            b"[console_scripts]\nGP-CONTROL-PLANE=gp_control_plane.cli:main\n"})),
             (SDIST, _tar_files({"gp_access_control_plane-0.5.0/PKG-INFO": metadata})),
+            (SOURCE, _tar_files({**TREE, "pyproject.toml": b"project=4\n"})),
         ):
-            with self.subTest(file=file, size=len(malformed)):
+            with self.subTest(file=file, digest=sha256(malformed).hexdigest()[:8]):
                 invalid = {**FILES, file: malformed}
                 sums = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in invalid.items()).encode()
                 invalid["SHA256SUMS"] = sums

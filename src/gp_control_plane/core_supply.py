@@ -136,16 +136,20 @@ def _verify_wheel(path: Path, project: str, version: str) -> None:
         if wheel.get("Wheel-Version") != "1.0" or "py3-none-any" not in wheel.get_all("Tag", []):
             raise ValueError("Unexpected wheel compatibility")
         entry_points = ConfigParser(interpolation=None)
+        entry_points.optionxform = str
         entry_points.read_string(data[f"{info_dir}/entry_points.txt"].decode("utf-8"))
+        entry_points.defaults().clear()
         if entry_points.get("console_scripts", "gp-control-plane", fallback=None) != "gp_control_plane.cli:main":
             raise ValueError("Wheel lacks the Core command")
 
 
 def _verify_project(raw: bytes, version: str) -> None:
     fields = tomllib.loads(raw.decode("utf-8")).get("project", {})
+    if not isinstance(fields, dict):
+        raise ValueError("Project metadata must be a table")
     scripts = fields.get("scripts", {})
     if (fields.get("name") != "gp-access-control-plane" or fields.get("version") != version
-            or scripts.get("gp-control-plane") != "gp_control_plane.cli:main"):
+            or not isinstance(scripts, dict) or scripts.get("gp-control-plane") != "gp_control_plane.cli:main"):
         raise ValueError("Project identity does not match the Core release")
 
 
