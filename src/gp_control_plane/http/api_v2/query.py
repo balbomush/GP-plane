@@ -2,12 +2,14 @@
 
 import re
 
-from .protocol import detail, invalid_parameters, query_fields
+from .protocol import detail, invalid_parameters, no_body_error, query_fields
 
 
 class Query:
-    def __init__(self, allowed: set[str]):
+    def __init__(self, allowed: set[str], *, accepts_body: bool = False):
         self.data, self.errors = query_fields(allowed)
+        if not accepts_body and (problem := no_body_error()) is not None:
+            self.errors.append(problem)
 
     def text(self, key: str, *, default=None, values=None):
         items = self.data.get(key)

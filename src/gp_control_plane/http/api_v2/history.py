@@ -63,8 +63,8 @@ def register_history(
         try:
             with admission.user_write(), connect_api2(state_dir) as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                row = require_run(conn, run_id)
-                if row["status"] not in search_history.TERMINAL:
+                row = search_history.read(conn, run_id)
+                if row is not None and row["status"] not in search_history.TERMINAL:
                     raise ApiError(409, "state_conflict", "Активный поиск нельзя удалить")
                 conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
         except OperationBusy as error:

@@ -117,6 +117,41 @@ class Api2MigrationTests(unittest.TestCase):
                 with closing(sqlite3.connect(path)) as conn:
                     self.assertEqual(list(conn.iterdump()), before)
 
+    def test_legacy_engine_facts_and_job_terminal_snapshot_are_distinct(self):
+        self.load_legacy()
+        created = "2026-10-28T09:10:00Z"
+        started = "2026-10-28T09:10:02Z"
+        finished = "2026-10-28T09:11:01Z"
+        for run_id, terminal in (("complete", "success"), ("cancel", "cancelled"), ("failure", "failed")):
+            storage.append_run(self.state, {"id": run_id, "kind": "zapret-standard-discovery",
+                                           "status": "queued", "started_at": created})
+            storage.append_run(self.state, {
+                "id": run_id, "kind": "standard-discovery", "status": "running",
+                "started_at": started, "domains": ["one.example"], "stdout_log": "engine.log",
+            })
+            job_failure = terminal == "failed"
+            storage.append_run(self.state, {
+                "id": run_id, "kind": "zapret-standard-discovery" if job_failure else "standard-discovery",
+                "status": terminal, "started_at": created if job_failure else started,
+                "completed_at": finished, "stdout_log": "engine.log",
+            })
+        with self.open_target() as conn:
+            for run_id, expected in (("complete", "completed"), ("cancel", "stopped"), ("failure", "failed")):
+                row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+                self.assertEqual((row["status"], row["started_at"], row["finished_at"]), (expected, started, finished))
+
+    def test_migration_rejects_missing_retained_unique_constraint(self):
+        fixture = (FIXTURES / "legacy_v11.sql").read_text(encoding="utf-8")
+        changed = fixture.replace("name TEXT NOT NULL UNIQUE", "name TEXT NOT NULL", 1)
+        self.assertNotEqual(fixture, changed)
+        path = storage.db_path(self.state)
+        with closing(sqlite3.connect(path)) as conn:
+            conn.executescript(changed)
+        with self.assertRaisesRegex(ValueError, "unique key in domains"):
+            self.open_target()
+        with closing(sqlite3.connect(path)) as conn:
+            self.assertEqual(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "11")
+
     def test_registration_failure_rolls_back_schema_and_rows(self):
         path = self.load_legacy()
         with closing(sqlite3.connect(path)) as conn:

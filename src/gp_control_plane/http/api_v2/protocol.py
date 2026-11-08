@@ -136,8 +136,14 @@ def required_text_fields(value: object, fields: tuple[str, ...]) -> dict:
     return dict(data)
 
 
+def no_body_error():
+    if request.environ.get("CONTENT_LENGTH") not in (None, "", "0") or request.environ.get("HTTP_TRANSFER_ENCODING"):
+        return detail("body:", "unknown_parameter", "Метод не принимает тело запроса")
+    return None
+
+
 def no_body() -> None:
     _, errors = query_fields(set())
-    if request.environ.get("CONTENT_LENGTH") not in (None, "", "0") or request.environ.get("HTTP_TRANSFER_ENCODING"):
-        errors.append(detail("body:", "unknown_parameter", "Метод не принимает тело запроса"))
+    if (problem := no_body_error()) is not None:
+        errors.append(problem)
     invalid_parameters(errors)

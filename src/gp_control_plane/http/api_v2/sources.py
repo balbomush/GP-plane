@@ -1,5 +1,6 @@
 """Read and update the existing v2fly local source using a verified revision."""
 
+import json
 from pathlib import Path
 import re
 import tarfile
@@ -24,7 +25,11 @@ def _revision(value):
 
 
 def _remote_revision():
-    value = domain_sources.parse_v2fly_revision(domain_sources.fetch_v2fly_revision())
+    raw = domain_sources.fetch_v2fly_revision().strip()
+    if _revision(raw):
+        return raw
+    payload = json.loads(raw)
+    value = payload.get("sha") if isinstance(payload, dict) else None
     revision = _revision(value)
     if revision is None:
         raise ValueError("No usable source revision")
@@ -33,7 +38,7 @@ def _remote_revision():
 
 def _upstream_error(error):
     if isinstance(error, HTTPError) and (
-        error.code == 429 or error.code == 403 and error.headers.get("X-RateLimit-Remaining") == "0"
+        error.code == 429 or error.code == 403 and error.headers is not None and error.headers.get("X-RateLimit-Remaining") == "0"
     ):
         return ApiError(503, "upstream_rate_limited", "Внешний источник ограничил запросы")
     return ApiError(502, "upstream_error", "Не удалось получить данные внешнего источника")
@@ -54,7 +59,10 @@ def register_sources(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
     def local(source):
         if source != "v2fly":
             raise ApiError(404, "not_found", "Источник не найден")
-        return domain_sources.read_v2fly_group_manifest(state_dir)
+        manifest, error = domain_sources.read_v2fly_group_manifest(state_dir)
+        if manifest and set(manifest["categories"]) != set(domain_sources._categories_from_group_dir(state_dir)):
+            return None, {"kind": "local_storage"}
+        return manifest, error
 
     def status(source):
         manifest, error = local(source)

@@ -47,6 +47,8 @@ class HistoryTests(Api2HttpFixture, unittest.TestCase):
         self.assertNotIn("checkpoint_json", detail)
         self.assertEqual(self.call("POST", milestone_path, b"", token)[2], {"id": 2})
         self.assertEqual(self.call("GET", milestone_path, b"", token)[2]["current_id"], 2)
+        self.assertEqual(self.call("GET", milestone_path, {"invalid": True}, token)[0], 400)
+        self.assertEqual(self.call("DELETE", run_path, b"", token)[0], 204)
         self.assertEqual(self.call("DELETE", run_path, b"", token)[0], 204)
         self.assertEqual(self.call("GET", run_path, b"", token)[0], 404)
         with storage.connect_api2(self.state) as conn:

@@ -108,7 +108,7 @@ def register_domain_lists(
     @app.put(_ROOT + "/<domain_list_id>")
     @auth
     def write(domain_list_id=None):
-        query = Query(set())
+        query = Query(set(), accepts_body=True)
         key = path_id("domain_list_id", domain_list_id, query.errors) if domain_list_id is not None else None
         name, domains, errors = _body(json_body(json_limit))
         invalid_parameters([*query.errors, *errors])
@@ -131,7 +131,9 @@ def register_domain_lists(
         try:
             with admission.user_write(), connect_api2(state_dir) as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                _resource(conn, key, writable=True)
+                row = domain_lists.read(conn, key)
+                if row is not None and row["kind"] != "user":
+                    raise ApiError(403, "read_only_resource", "Встроенный список нельзя менять")
                 conn.execute("DELETE FROM domain_presets WHERE id=?", (key,))
         except OperationBusy as error:
             raise ApiError(409, "state_conflict", "Пользовательские данные восстанавливаются") from error

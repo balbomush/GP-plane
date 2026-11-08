@@ -30,9 +30,10 @@ class SourceTests(Api2HttpFixture, unittest.TestCase):
         archive_bytes = BytesIO()
         with open_tar(fileobj=archive_bytes, mode="w:gz") as archive:
             domain_bytes = b"domain:one.example\n"
-            info = TarInfo("domain-list-community-pinned/data/sample")
-            info.size = len(domain_bytes)
-            archive.addfile(info, BytesIO(domain_bytes))
+            for category in ("sample", "another"):
+                info = TarInfo("domain-list-community-pinned/data/" + category)
+                info.size = len(domain_bytes)
+                archive.addfile(info, BytesIO(domain_bytes))
         first, second = "a" * 40, "b" * 40
         with patch.object(domain_sources, "fetch_v2fly_revision", return_value=first), patch.object(
             domain_sources, "fetch_v2fly_archive", return_value=archive_bytes.getvalue()
@@ -44,6 +45,7 @@ class SourceTests(Api2HttpFixture, unittest.TestCase):
                          ["one.example"])
         for revision, code, expected in [
             ("invalid", 502, "upstream_error"),
+            ('{"commit":{"tree":{"sha":"' + "c" * 40 + '"}}}', 502, "upstream_error"),
             (HTTPError("https://example.test", 429, "rate limited", {}, None), 503, "upstream_rate_limited"),
         ]:
             options = {"side_effect": revision} if isinstance(revision, Exception) else {"return_value": revision}
@@ -55,3 +57,21 @@ class SourceTests(Api2HttpFixture, unittest.TestCase):
         with patch.object(domain_sources, "fetch_v2fly_revision", return_value=second):
             status, _, body = self.call("GET", SOURCE + "/update", b"", token)
             self.assertEqual((status, body["update_available"]), (200, True))
+        groups = domain_sources.v2fly_group_cache_dir(self.state)
+        (groups / "another").unlink()
+        self.assertEqual(self.call("GET", SOURCE, b"", token)[2]["state"], "error")
+        with patch.object(domain_sources, "fetch_v2fly_revision", return_value=first):
+            self.assertEqual(self.call("GET", SOURCE + "/update", b"", token)[0], 502)
+
+        remove = domain_sources.shutil.rmtree
+
+        def fail_cleanup(path, *args, **kwargs):
+            if path.name.startswith(".v2fly-groups-previous-"):
+                raise PermissionError("cleanup fixture")
+            return remove(path, *args, **kwargs)
+
+        with patch.object(domain_sources, "fetch_v2fly_revision", return_value=second), patch.object(
+            domain_sources, "fetch_v2fly_archive", return_value=archive_bytes.getvalue()
+        ), patch.object(domain_sources.shutil, "rmtree", side_effect=fail_cleanup):
+            status, _, body = self.call("POST", SOURCE + "/update", b"", token)
+        self.assertEqual((status, body["installed_revision"]), (200, second))

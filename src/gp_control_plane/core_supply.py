@@ -1,7 +1,12 @@
 """Prepare and verify the exact published Core distribution for local use."""
 
-from hashlib import sha256
-from pathlib import Path
+from email.parser import BytesParser
+from hashlib import file_digest, sha256
+import os
+from pathlib import Path, PurePosixPath
+from tarfile import TarError, open as open_tar
+import tomllib
+from zipfile import BadZipFile, ZipFile
 import re
 from tempfile import TemporaryDirectory
 from urllib.error import HTTPError
@@ -66,6 +71,53 @@ def _sums(raw: bytes) -> dict[str, str]:
     return result
 
 
+def _package_metadata(data: bytes, version: str) -> None:
+    metadata = BytesParser().parsebytes(data, headersonly=True)
+    if metadata.get_all("Name") != ["gp-access-control-plane"] or metadata.get_all("Version") != [version]:
+        raise ValueError("Package name or version does not match the release")
+
+
+def _tar_files(path: Path, names: set[str]) -> dict[str, bytes]:
+    selected = {}
+    total = 0
+    with open_tar(path, "r:gz") as archive:
+        for member in archive:
+            path_parts = PurePosixPath(member.name)
+            if path_parts.is_absolute() or ".." in path_parts.parts or not (member.isdir() or member.isfile()):
+                raise ValueError("Unsafe release archive member")
+            total += member.size
+            if total > 4 * _MAX_ASSET:
+                raise ValueError("Release archive expands beyond its limit")
+            if member.name in names:
+                if member.name in selected or not member.isfile() or member.size > _MAX_SUMS:
+                    raise ValueError("Invalid release metadata member")
+                with archive.extractfile(member) as file:
+                    selected[member.name] = file.read()
+    if selected.keys() != names:
+        raise ValueError("Release archive metadata missing")
+    return selected
+
+
+def _verify_identity(root: Path, version: str, source: str) -> None:
+    project = f"gp_access_control_plane-{version}"
+    wheel = root / f"{project}-py3-none-any.whl"
+    sdist = root / f"{project}.tar.gz"
+    try:
+        with ZipFile(wheel) as archive:
+            metadata = archive.getinfo(f"{project}.dist-info/METADATA")
+            if metadata.file_size > _MAX_SUMS:
+                raise ValueError("Wheel metadata exceeds its limit")
+            _package_metadata(archive.read(metadata), version)
+        info = f"{project}/PKG-INFO"
+        _package_metadata(_tar_files(sdist, {info})[info], version)
+        tree = _tar_files(root / source, {"pyproject.toml", "scripts/install-linux.sh"})
+        fields = tomllib.loads(tree["pyproject.toml"].decode("utf-8")).get("project", {})
+        if fields.get("name") != "gp-access-control-plane" or fields.get("version") != version:
+            raise ValueError("Source name or version does not match the release")
+    except (BadZipFile, TarError, KeyError, EOFError) as error:
+        raise ValueError("Invalid release package format") from error
+
+
 def _valid_size(root: Path, version: str) -> int:
     if root.is_symlink() or not root.is_dir():
         raise ValueError("No safe cached supply")
@@ -86,11 +138,11 @@ def _valid_size(root: Path, version: str) -> int:
         if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= _MAX_ASSET:
             raise ValueError("Invalid cached asset")
         with path.open("rb") as file:
-            from hashlib import file_digest
             actual = file_digest(file, "sha256").hexdigest()
         if actual != expected:
             raise ValueError("Release checksum mismatch")
         total += path.stat().st_size
+    _verify_identity(root, version, sources[0])
     return total
 
 
@@ -99,8 +151,17 @@ def prepare(state_dir: Path, version: str) -> int | None:
         return None
     store = state_dir / "strategy-finder" / "downloads"
     target = store / version
-    if target.exists() or target.is_symlink():
-        return _valid_size(target, version)
+    if store.is_symlink() or target.is_symlink():
+        raise ValueError("Unsafe release cache")
+    if target.exists():
+        if not target.is_dir():
+            raise ValueError("Release cache path is not a directory")
+        try:
+            return _valid_size(target, version)
+        except (OSError, ValueError):
+            # A damaged local supply is not a usable release. Leave it
+            # in place until a new complete supply has been validated.
+            pass
     candidates = [(info, files) for info, files in catalog() if info["version"] == version]
     if not candidates:
         return None
@@ -124,7 +185,15 @@ def prepare(state_dir: Path, version: str) -> int | None:
                 raise ValueError("Release checksum mismatch")
             (stage / name).write_bytes(data)
         size = _valid_size(stage, version)
-        stage.rename(target)
+        previous = Path(temporary) / "previous"
+        if target.exists():
+            target.rename(previous)
+        try:
+            stage.rename(target)
+        except OSError:
+            if previous.exists():
+                os.replace(previous, target)
+            raise
         _fsync_directory(store)
     return size
 

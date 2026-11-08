@@ -16,7 +16,7 @@ class Api2HttpFixture:
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.state = Path(temp.name)
+        self.state = Path(temp.name) / "state"
         app = Bottle()
         self.configure(app)
         with socket.socket() as sock:

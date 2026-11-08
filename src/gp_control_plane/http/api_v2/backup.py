@@ -1,6 +1,8 @@
 """User backup methods with admission before upload and cleanup before release."""
 
 from collections.abc import Iterable
+from contextlib import ExitStack, contextmanager
+from threading import Lock
 from pathlib import Path
 import re
 import shutil
@@ -66,6 +68,16 @@ def register_backups(
         admission = OperationAdmission()
     authorize = authorized(state_dir)
     saved = user_backup.saved_path(state_dir)
+    saved_lock = Lock()
+
+    @contextmanager
+    def saved_file():
+        if not saved_lock.acquire(blocking=False):
+            raise ApiError(409, "state_conflict", "Сохранённая копия используется")
+        try:
+            yield
+        finally:
+            saved_lock.release()
 
     def restore_at(upload_size=None):
         restored = False
@@ -100,7 +112,7 @@ def register_backups(
     @authorize
     def create():
         no_body()
-        with admission.claim("backup_create"):
+        with admission.claim("backup_create"), saved_file():
             try:
                 return json_response(user_backup.create(state_dir))
             except user_backup.BackupTooLarge as error:
@@ -110,53 +122,48 @@ def register_backups(
     @authorize
     def delete():
         no_body()
-        saved.unlink(missing_ok=True)
+        with saved_file():
+            saved.unlink(missing_ok=True)
         return HTTPResponse(status=204, headers={"Cache-Control": "no-store"})
 
     @app.get(_ROOT + "/file")
     @authorize
     def download():
         no_body()
-        operation = admission.claim("archive_download")
-        operation.__enter__()
+        stack = ExitStack()
         try:
-            file = saved.open("rb")
-        except FileNotFoundError as error:
-            operation.__exit__(None, None, None)
-            raise ApiError(404, "not_found", "Сохранённой копии нет") from error
-        except BaseException:
-            operation.__exit__(None, None, None)
-            raise
-
-        def release():
+            stack.enter_context(admission.claim("archive_download"))
+            stack.enter_context(saved_file())
             try:
-                file.close()
-            finally:
-                operation.__exit__(None, None, None)
-
-        try:
+                file = stack.enter_context(saved.open("rb"))
+            except FileNotFoundError as error:
+                raise ApiError(404, "not_found", "Сохранённой копии нет") from error
+            try:
+                user_backup.validate_download(file, saved.parent)
+            except ValueError as error:
+                raise ApiError(409, "archive_incomplete", "Сохранённая копия не готова к безопасной выдаче") from error
             file.seek(0, 2)
             length = file.tell()
             file.seek(0)
-            return HTTPResponse(ClosingIterator(_blocks(file), release), headers={
+            return HTTPResponse(ClosingIterator(_blocks(file), stack.close), headers={
                 "Content-Type": "application/octet-stream", "Content-Length": str(length), "Cache-Control": "no-store",
                 "Content-Disposition": 'attachment; filename="gp-plane-backup.zip"',
             })
         except BaseException:
-            release()
+            stack.close()
             raise
 
     @app.post(_ROOT + "/restore")
     @authorize
     def restore():
         no_body()
-        with admission.claim("backup_restore"):
+        with admission.claim("backup_restore"), saved_file():
             return restore_at()
 
     @app.post(_ROOT + "/restore-file")
     @authorize
     def restore_file():
-        Query(set()).check()
+        Query(set(), accepts_body=True).check()
         size = _file_body_size(upload_limit)
         with admission.claim("backup_restore"):
             return restore_at(size)

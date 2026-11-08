@@ -6,8 +6,12 @@ from typing import Any
 
 
 _TERMINAL = {"completed", "stopped", "failed", "timeout"}
-_ACTIVE = {"starting", "running", "stopping"}
-_ENGINE_SNAPSHOT_FIELDS = ("stdout_log", "progress_log", "discovery_options")
+_ACTIVE = {"queued", "starting", "running", "stopping"}
+_STATUS_MAP = {"success": "completed", "cancelled": "stopped"}
+_KIND_MAP = {
+    "zapret-standard-discovery": "standard-discovery",
+    "zapret-multi-domain-discovery": "multi-domain-discovery",
+}
 
 
 def _merge_known(target: dict[str, Any], field: str, value: Any, run_id: str) -> None:
@@ -56,9 +60,9 @@ def migrate_history(conn: sqlite3.Connection) -> None:
         status = ""
         for row in snapshots:
             payload = _read_payload(row, run_id)
-            status = row["status"] or status
+            status = _STATUS_MAP.get(row["status"], row["status"]) or status
             interrupted = payload.get("interrupted") is True
-            _merge_known(parameters, "kind", row["kind"], run_id)
+            _merge_known(parameters, "kind", _KIND_MAP.get(row["kind"], row["kind"]), run_id)
             _merge_known(parameters, "candidate_id", payload.get("candidate_id"), run_id)
             if not interrupted:
                 _merge_known(parameters, "test", payload.get("test"), run_id)
@@ -67,7 +71,7 @@ def migrate_history(conn: sqlite3.Connection) -> None:
                     known_options = parameters.setdefault("discovery_options", {})
                     for field, value in options.items():
                         _merge_known(known_options, field, value, run_id)
-                if any(field in payload for field in _ENGINE_SNAPSHOT_FIELDS):
+                if isinstance(options, dict) or isinstance(payload.get("domains"), list):
                     domains = payload.get("domains")
                     if isinstance(domains, list) and domains and all(isinstance(value, str) for value in domains):
                         _merge_known(known, "domains", domains, run_id)

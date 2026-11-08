@@ -50,6 +50,9 @@ class DomainListTests(Api2HttpFixture, unittest.TestCase):
             ).fetchone()[0]
         status, _, result = self.call("PUT", f"{LISTS}/{builtin}", content, token)
         self.assertEqual((status, result["error"]["code"]), (403, "read_only_resource"))
+        self.assertEqual(self.call("DELETE", url, {"invalid": True}, token)[0], 400)
+        self.assertEqual(self.call("GET", url, b"", token)[0], 200)
+        self.assertEqual(self.call("DELETE", url, b"", token)[0], 204)
         self.assertEqual(self.call("DELETE", url, b"", token)[0], 204)
         with storage.connect_api2(self.state) as conn:
             row = conn.execute("SELECT preset_id, domains_json FROM runs WHERE id='historical'").fetchone()

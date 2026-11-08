@@ -70,6 +70,11 @@ class CatalogTests(Api2HttpFixture, unittest.TestCase):
             for item in manifest["files"]:
                 self.assertEqual(hashlib.sha256(archive.read(item["path"])).hexdigest(), item["sha256"])
         with storage.connect_api2(self.state) as conn:
+            reference = conn.execute("SELECT assets_ref FROM strategies WHERE id=?", (strategy,)).fetchone()[0]
             conn.execute("INSERT INTO strategies(id, protocol, args, family) VALUES('legacy', 'tls', 'known', 'other')")
+        blob = self.state / "strategy-finder" / "assets" / reference / "assets" / "0.bin"
+        blob.write_bytes(b"damaged")
+        self.assertFalse(self.call("GET", f"{PATH}/{strategy}", b"", token)[2]["archive_available"])
+        self.assertEqual(self.call("GET", f"{PATH}/{strategy}/archive", b"", token)[0], 409)
         status, _, body = self.call("GET", PATH + "/legacy/archive", b"", token)
         self.assertEqual((status, body["error"]["code"]), (409, "archive_incomplete"))

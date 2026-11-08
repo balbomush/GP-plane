@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import json
+import logging
 import io
 import os
 import shutil
@@ -157,7 +158,10 @@ def prepare_v2fly_local_storage(
         if staged_group_dir.exists():
             shutil.rmtree(staged_group_dir)
         if published and previous_group_dir and previous_group_dir.exists():
-            shutil.rmtree(previous_group_dir)
+            try:
+                shutil.rmtree(previous_group_dir)
+            except OSError:
+                logging.getLogger(__name__).warning("Published v2fly source; previous generation cleanup failed")
 
 
 def _read_v2fly_metadata_bytes(path: Path) -> bytes | None:

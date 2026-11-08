@@ -1,6 +1,9 @@
 """Status and package preparation use the same heavy-operation admission."""
 
 from hashlib import sha256
+from io import BytesIO
+from tarfile import TarInfo, open as open_tar
+from zipfile import ZipFile
 import json
 import unittest
 from unittest.mock import patch
@@ -16,7 +19,28 @@ TAG = "v0.5.0"
 SOURCE = "core-" + "a" * 40 + ".tar.gz"
 WHEEL = "gp_access_control_plane-0.5.0-py3-none-any.whl"
 SDIST = "gp_access_control_plane-0.5.0.tar.gz"
-FILES = {SOURCE: b"source", WHEEL: b"wheel", SDIST: b"sdist"}
+def _tar_files(entries):
+    result = BytesIO()
+    with open_tar(fileobj=result, mode="w:gz") as archive:
+        for name, data in entries.items():
+            info = TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, BytesIO(data))
+    return result.getvalue()
+
+
+metadata = b"Metadata-Version: 2.4\r\nName: gp-access-control-plane\r\nVersion: 0.5.0\r\n"
+wheel_bytes = BytesIO()
+with ZipFile(wheel_bytes, "w") as wheel:
+    wheel.writestr("gp_access_control_plane-0.5.0.dist-info/METADATA", metadata)
+FILES = {
+    SOURCE: _tar_files({
+        "pyproject.toml": b'[project]\nname="gp-access-control-plane"\nversion="0.5.0"\n',
+        "scripts/install-linux.sh": b"#!/bin/bash\n",
+    }),
+    WHEEL: wheel_bytes.getvalue(),
+    SDIST: _tar_files({"gp_access_control_plane-0.5.0/PKG-INFO": metadata}),
+}
 CHECKSUMS = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in FILES.items()).encode()
 DELIVERY = {**FILES, "SHA256SUMS": CHECKSUMS}
 
@@ -55,3 +79,23 @@ class ServiceTests(Api2HttpFixture, unittest.TestCase):
         with patch.object(releases, "fetch_github_releases", side_effect=OSError("offline")) as fetch:
             self.assertEqual(self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)[0], 200)
             fetch.assert_not_called()
+        cached_wheel = self.state / "strategy-finder" / "downloads" / "0.5.0" / WHEEL
+        cached_wheel.write_bytes(b"damaged")
+        with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])) as fetch, patch.object(
+            releases, "fetch_release_asset", side_effect=lambda tag, name, size: DELIVERY[name]
+        ):
+            self.assertEqual(self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)[0], 200)
+            fetch.assert_called_once()
+        self.assertEqual(cached_wheel.read_bytes(), DELIVERY[WHEEL])
+
+        cached_wheel.write_bytes(b"damaged")
+        invalid = {**FILES, WHEEL: b"not a wheel"}
+        sums = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in invalid.items()).encode()
+        invalid["SHA256SUMS"] = sums
+        row["assets"] = [{"name": name, "size": len(data)} for name, data in invalid.items()]
+        with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])), patch.object(
+            releases, "fetch_release_asset", side_effect=lambda tag, name, size: invalid[name]
+        ):
+            status, _, body = self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)
+        self.assertEqual((status, body["error"]["code"]), (502, "upstream_error"))
+        self.assertEqual(cached_wheel.read_bytes(), b"damaged")

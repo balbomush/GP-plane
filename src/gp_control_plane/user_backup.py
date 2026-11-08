@@ -95,8 +95,20 @@ def create(state_dir: Path) -> dict:
         }
         with path.open("r+b") as file:
             os.fsync(file.fileno())
+        previous = stage / "previous.zip"
+        if destination.is_symlink():
+            raise ValueError("Unsafe saved backup path")
+        if destination.exists():
+            os.link(destination, previous)
         os.replace(path, destination)
-        backups._fsync_directory(destination.parent)
+        try:
+            backups._fsync_directory(destination.parent)
+        except OSError:
+            if previous.exists():
+                os.replace(previous, destination)
+            else:
+                destination.unlink()
+            raise
     return payload
 
 
@@ -140,6 +152,67 @@ def _unpack(archive, folder):
         raise ValueError("Backup checksum coverage is incomplete")
 
 
+def validate_download(archive, root: Path) -> None:
+    """Fail closed on old snapshots that may include service settings or access."""
+    with TemporaryDirectory(prefix=".backup-download-", dir=root) as temp:
+        folder = Path(temp)
+        try:
+            _unpack(archive, folder)
+        except BadZipFile as error:
+            raise ValueError("Invalid backup ZIP") from error
+        manifest = backups._read_manifest(folder / "manifest.json")
+        if manifest.get("schema_version") != FORMAT or manifest.get("completed") != "true":
+            raise ValueError("Saved backup is not a complete user archive")
+        expected = {"manifest.json", "checksums.sha256"}
+        expected.update(f"data/{table}.ndjson" for table in USER_TABLES)
+        paths = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
+        if not expected <= paths or any(
+            not re.fullmatch(r"assets/[a-f0-9]{64}/(?:identity\.json|assets/[0-9]+\.bin)", path)
+            for path in paths - expected
+        ):
+            raise ValueError("Saved backup contains unexpected members")
+    archive.seek(0)
+
+
+def _check_json(text, expected_type, field):
+    if not isinstance(text, str):
+        raise ValueError(f"Invalid {field}")
+    value = json.loads(text)
+    if not isinstance(value, expected_type):
+        raise ValueError(f"Invalid {field}")
+    return value
+
+
+def _validate_row(table, row):
+    if table == "domain_presets":
+        _check_json(row["source_json"], dict, "source")
+        if row["kind"] not in ("user", "system"):
+            raise ValueError("Invalid preset type")
+    if table == "bundles":
+        sources = _check_json(row["sources_json"], list, "bundle sources")
+        if any(
+            not isinstance(source, dict) or not isinstance(source.get("source"), str)
+            or not isinstance(source.get("name"), str)
+            or source.get("reference") is not None and not isinstance(source["reference"], str)
+            for source in sources
+        ):
+            raise ValueError("Invalid bundle source")
+    if table != "runs":
+        return
+    if row["status"] not in ("starting", "running", "stopping", "completed", "stopped", "failed"):
+        raise ValueError("Invalid run status")
+    for field, value_type in (
+        ("parameters_json", dict), ("checkpoint_json", dict), ("error_json", dict), ("domains_json", list),
+    ):
+        if row[field] is None:
+            continue
+        value = _check_json(row[field], value_type, field)
+        if field == "domains_json" and not all(isinstance(domain, str) and domain for domain in value):
+            raise ValueError("Invalid run domains")
+        if field == "error_json" and not all(isinstance(value.get(key), str) and value[key] for key in ("code", "message")):
+            raise ValueError("Invalid run error")
+
+
 def _replace_rows(source, target):
     for table in reversed(USER_TABLES):
         target.execute(f"DELETE FROM {table}")
@@ -164,6 +237,7 @@ def _load_rows(folder, conn):
                 row = json.loads(line)
                 if not isinstance(row, dict) or row.keys() != set(columns):
                     raise ValueError(f"Invalid backup row in {table}")
+                _validate_row(table, row)
                 conn.execute(f"INSERT INTO {table}({', '.join(columns)}) VALUES({placeholders})",
                              [row[name] for name in columns])
     if conn.execute("SELECT max(id) FROM milestones").fetchone()[0] in (None, 0):

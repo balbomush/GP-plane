@@ -65,6 +65,18 @@ def _validate_layout(conn: sqlite3.Connection, tables: set[str], expected: dict[
             raise ValueError(f"Unexpected v{version} columns in {table}")
 
 
+def _validate_retained_keys(conn: sqlite3.Connection, version: int) -> None:
+    for table, columns in (("domains", ("name",)), ("domain_presets", ("scope", "name", "kind"))):
+        if not any(
+            unique and not partial and tuple(
+                info[2] for info in conn.execute("SELECT * FROM pragma_index_info(?)", (index,))
+            ) == columns
+            for _, index, unique, _, partial in conn.execute(f"PRAGMA index_list({table})")
+        ):
+            raise ValueError(f"Unexpected v{version} unique key in {table}")
+        if {row[1] for row in conn.execute(f"PRAGMA table_info({table})") if row[5]} != {"id"}:
+            raise ValueError(f"Unexpected v{version} primary key in {table}")
+
 def _registrations(conn: sqlite3.Connection) -> list[tuple[int, str]]:
     return [
         (row[0], row[1])
@@ -108,6 +120,7 @@ def _create(conn: sqlite3.Connection) -> None:
 
 def _migrate_v11(conn: sqlite3.Connection, tables: set[str], v11_registrations: tuple) -> None:
     _validate_layout(conn, tables, V11_COLUMNS, 11)
+    _validate_retained_keys(conn, 11)
     if _registrations(conn) != list(v11_registrations):
         raise ValueError("Unexpected v11 migration registrations")
     if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
@@ -153,6 +166,7 @@ def _migrate_v11(conn: sqlite3.Connection, tables: set[str], v11_registrations: 
 
 def _validate_target(conn: sqlite3.Connection, tables: set[str], v11_registrations: tuple) -> None:
     _validate_layout(conn, tables, V12_COLUMNS, VERSION)
+    _validate_retained_keys(conn, VERSION)
     if _registrations(conn) not in ([(VERSION, NAME)], [*v11_registrations, (VERSION, NAME)]):
         raise ValueError("Unexpected v12 migration registrations")
 

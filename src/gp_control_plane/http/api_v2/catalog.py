@@ -74,7 +74,7 @@ def register_catalog(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
 
     def available(kind, row):
         try:
-            _files(assets_root, kind, row, verify=False)
+            _files(assets_root, kind, row, verify=True)
         except (OSError, ValueError):
             return False
         return True
