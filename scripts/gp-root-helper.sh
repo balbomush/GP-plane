@@ -502,6 +502,11 @@ run_owned_process() {
     fi
     return "$cleanup_status"
   }
+  report_clean_process_group() {
+    if [ -n "${GP_API2_TRACE:-}" ]; then
+      printf '\nGP-API2 %s process-clean\n' "$GP_API2_TRACE"
+    fi
+  }
   abort_owned_run() {
     abort_status="$1"
     [ "$abort_in_progress" = 0 ] || exit "$abort_status"
@@ -652,7 +657,9 @@ run_owned_process() {
     if [ "$status_result" -eq 3 ]; then
       fail "managed target status is unavailable and process identity is indeterminate"
     fi
-    cleanup_owned_lifecycle || true
+    if cleanup_owned_lifecycle; then
+      report_clean_process_group
+    fi
     fail "managed supervisor exited before target status"
   fi
   if cleanup_owned_lifecycle; then
@@ -663,9 +670,7 @@ run_owned_process() {
     fail "managed process group could not be safely cleaned up (status $cleanup_status)"
   fi
   trap - EXIT HUP INT TERM
-  if [ -n "${GP_API2_TRACE:-}" ]; then
-    printf 'GP-API2 %s process-clean\n' "$GP_API2_TRACE"
-  fi
+  report_clean_process_group
   return "$code"
 }
 
