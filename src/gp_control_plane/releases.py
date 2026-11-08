@@ -240,3 +240,14 @@ def _prerelease_key(value: str) -> tuple[tuple[int, int | str], ...]:
         else:
             parts.append((1, part.lower()))
     return tuple(parts)
+
+
+def fetch_release_asset(tag: str, name: str, size: int) -> bytes:
+    if not re.fullmatch(r"v[A-Za-z0-9.-]+", tag) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        raise ValueError("Invalid release asset identity")
+    request = Request(f"{RELEASES_PAGE_URL}/download/{tag}/{name}", headers={"User-Agent": "gp-control-plane"})
+    with urlopen(request, timeout=30) as response:
+        data = response.read(size + 1)
+    if len(data) != size:
+        raise ValueError("Release asset size mismatch")
+    return data

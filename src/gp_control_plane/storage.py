@@ -11,6 +11,7 @@ from .repositories.presets import _empty_preset_domains_page
 
 
 from collections.abc import Iterator
+from collections.abc import Mapping
 from contextlib import contextmanager
 import json
 import os
@@ -198,6 +199,48 @@ def db_path(state_dir: Path) -> Path:
     _prepare_sqlite_path(path)
     return path
 
+
+def connect_api2(state_dir: Path, *, busy_timeout_ms: int = 30_000) -> sqlite3.Connection:
+    """Open API 2 storage. The legacy runtime must be quiescent before cutover."""
+    from .migrations import api2
+
+    path = db_path(state_dir)
+    conn = sqlite3.connect(path, timeout=max(0, busy_timeout_ms) / 1000, factory=ClosingConnection)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        api2.initialize(conn, SCHEMA_MIGRATIONS, legacy_idle=lambda: not _state_has_active_job(state_dir))
+        _secure_sqlite_files(path)
+        return conn
+    except BaseException as error:
+        conn.close()
+        if isinstance(error, sqlite3.OperationalError):
+            _raise_storage_unavailable(error)
+        raise
+
+def save_strategy_check(
+    state_dir: Path,
+    *,
+    run_id: str,
+    protocol: str,
+    execution_format: str,
+    args: str,
+    files: Mapping[str, bytes],
+    outcomes: Mapping[str, bool],
+    checkpoint: dict[str, Any] | None,
+) -> str | None:
+    """Persist the complete check using one FULL SQLite write transaction."""
+    from .repositories import strategy_results
+
+    with connect_api2(state_dir) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return strategy_results.save_check(
+            conn, state_dir / "strategy-finder" / "assets", run_id=run_id, protocol=protocol,
+            execution_format=execution_format, args=args, files=files,
+            outcomes=outcomes, checkpoint=checkpoint,
+        )
 
 def connect(
     state_dir: Path,

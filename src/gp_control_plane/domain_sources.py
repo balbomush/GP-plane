@@ -425,8 +425,13 @@ def v2fly_group_manifest_path(state_dir: Path) -> Path:
     return state_dir / "domain-sources" / "v2fly-groups.json"
 
 
-def fetch_v2fly_archive() -> bytes:
-    with urlopen(V2FLY_ARCHIVE_URL, timeout=60) as response:  # noqa: S310
+def fetch_v2fly_archive(revision: str | None = None) -> bytes:
+    url = V2FLY_ARCHIVE_URL
+    if revision is not None:
+        if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise ValueError("Invalid v2fly commit")
+        url = V2FLY_ARCHIVE_URL.removesuffix("/refs/heads/master") + "/" + revision
+    with urlopen(url, timeout=60) as response:  # noqa: S310
         return response.read()
 
 

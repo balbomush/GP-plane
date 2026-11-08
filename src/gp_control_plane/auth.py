@@ -27,6 +27,10 @@ class AuthenticationError(ValueError):
 
     status_code = 401
 
+    def __init__(self, message: str, *, code: str = "token_invalid"):
+        super().__init__(message)
+        self.code = code
+
 
 class PasswordValidationError(ValueError):
     """Invalid password-change input that API adapters must expose as HTTP 400."""
@@ -89,7 +93,7 @@ def _validate_bearer_token(settings: dict[str, Any], authorization: str | None) 
     if scheme.lower() != "bearer" or not token.strip():
         raise AuthenticationError("missing bearer token")
     signed_payload, separator, signature = token.strip().partition(".")
-    if not separator or not signature:
+    if not separator or not signature or not token.isascii():
         raise AuthenticationError("invalid bearer token")
     expected = _sign(settings, signed_payload)
     if not hmac.compare_digest(signature, expected):
@@ -108,9 +112,9 @@ def _validate_bearer_token(settings: dict[str, Any], authorization: str | None) 
     except (KeyError, TypeError, ValueError) as exc:
         raise AuthenticationError("invalid bearer token") from exc
     if token_version != int(settings["token_version"]):
-        raise AuthenticationError("expired bearer token")
+        raise AuthenticationError("expired bearer token", code="token_revoked")
     if expires_at <= int(time.time()):
-        raise AuthenticationError("expired bearer token")
+        raise AuthenticationError("expired bearer token", code="token_expired")
 
 
 def health_payload() -> dict[str, str]:
@@ -219,8 +223,8 @@ def _password_matches(settings: dict[str, Any], password: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
-def _token_payload(settings: dict[str, Any]) -> dict[str, Any]:
-    expires_at = int(time.time()) + TOKEN_TTL_SECONDS
+def _issue_token(settings: dict[str, Any], ttl_seconds: int) -> tuple[str, int]:
+    expires_at = int(time.time()) + ttl_seconds
     payload = {
         "sub": DEFAULT_USERNAME,
         "exp": expires_at,
@@ -228,8 +232,13 @@ def _token_payload(settings: dict[str, Any]) -> dict[str, Any]:
         "nonce": secrets.token_urlsafe(12),
     }
     encoded = _encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    return f"{encoded}.{_sign(settings, encoded)}", expires_at
+
+
+def _token_payload(settings: dict[str, Any]) -> dict[str, Any]:
+    token, _ = _issue_token(settings, TOKEN_TTL_SECONDS)
     return {
-        "access_token": f"{encoded}.{_sign(settings, encoded)}",
+        "access_token": token,
         "token_type": "Bearer",
         "expires_in": TOKEN_TTL_SECONDS,
     }
