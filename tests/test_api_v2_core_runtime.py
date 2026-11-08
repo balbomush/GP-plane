@@ -1,6 +1,7 @@
 """Production listener mounts API 2, its schema, and the migrated storage."""
 
-from contextlib import closing
+from contextlib import ExitStack, closing
+from http.client import HTTPConnection
 from pathlib import Path
 import json
 import sqlite3
@@ -50,3 +51,41 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/auth/login", {})[0], 404)
         status, _, health = self.call("GET", "/api/health", b"")
         self.assertEqual((status, health), (200, {"status": "ok"}))
+
+    def test_shared_sse_releases_its_two_slots_after_revocation(self):
+        base = "/api/v2"
+        credentials = {"username": "admin", "password": "migration-fixture-only"}
+        status, _, login = self.call("POST", base + "/access/authentication", credentials)
+        self.assertEqual(status, 200)
+        token = login["bearer_token"]
+
+        def connect(cleanup, bearer):
+            connection = cleanup.enter_context(closing(HTTPConnection("127.0.0.1", self.port, timeout=10)))
+            connection.request("GET", base + "/search/events", headers={"Authorization": "Bearer " + bearer})
+            return cleanup.enter_context(closing(connection.getresponse()))
+
+        def first_snapshot(stream):
+            self.assertEqual(stream.status, 200)
+            self.assertEqual(stream.readline(), b"event: search\n")
+            self.assertEqual(json.loads(stream.readline().removeprefix(b"data: ")),
+                             {"active": False, "run": None})
+            self.assertEqual(stream.readline(), b"\n")
+
+        with ExitStack() as cleanup:
+            first, second = connect(cleanup, token), connect(cleanup, token)
+            first_snapshot(first)
+            first_snapshot(second)
+            rejected = connect(cleanup, token)
+            self.assertEqual(rejected.status, 503)
+            self.assertEqual(json.load(rejected)["error"]["code"], "stream_capacity_exhausted")
+            status, _, _ = self.call("PUT", base + "/access/change_password", {
+                "username": "admin", "old_password": credentials["password"], "new_password": "new-fixture-only",
+            }, token)
+            self.assertEqual(status, 204)
+            self.assertEqual(first.read(), b"")
+            self.assertEqual(second.read(), b"")
+            status, _, login = self.call("POST", base + "/access/authentication", {
+                **credentials, "password": "new-fixture-only",
+            })
+            self.assertEqual(status, 200)
+            first_snapshot(connect(cleanup, login["bearer_token"]))

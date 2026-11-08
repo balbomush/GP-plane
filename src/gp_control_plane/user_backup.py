@@ -9,7 +9,7 @@ import os
 import re
 import sqlite3
 import stat
-from tempfile import TemporaryDirectory, mkdtemp
+from tempfile import mkdtemp
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from . import backups, storage, strategy_assets
@@ -60,8 +60,7 @@ def delete_saved(state_dir: Path) -> None:
     saved_path(state_dir).unlink(missing_ok=True)
 
 
-def restore_legacy_saved(state_dir: Path, snapshot: Path, stage: Path) -> None:
-    copy = stage / "legacy"
+def _copy_legacy(snapshot: Path, copy: Path) -> Path:
     copy.mkdir()
     total = 0
     for name in sorted(backups.SNAPSHOT_DOWNLOAD_FILES):
@@ -76,7 +75,11 @@ def restore_legacy_saved(state_dir: Path, snapshot: Path, stage: Path) -> None:
         shutil.copyfile(source, output)
     if not backups._verify_snapshot_path(copy):
         raise ValueError("Legacy snapshot checksum mismatch")
-    _restore_folder(state_dir, copy, stage)
+    return copy
+
+
+def restore_legacy_saved(state_dir: Path, snapshot: Path, stage: Path) -> None:
+    _restore_folder(state_dir, _copy_legacy(snapshot, stage / "legacy"), stage)
 
 
 def _asset_root(state_dir):
@@ -205,26 +208,42 @@ def _unpack(archive, folder):
         raise ValueError("Backup checksum coverage is incomplete")
 
 
-def validate_download(archive, root: Path) -> None:
-    """Fail closed on old snapshots that may include service settings or access."""
-    with TemporaryDirectory(prefix=".backup-download-", dir=root) as temp:
-        folder = Path(temp)
+def prepare_download(archive, legacy_snapshot: Path | None, stage: Path):
+    """Validate saved user data or create a temporary v7 user-only export."""
+    folder = stage / "input"
+    if legacy_snapshot is not None:
+        _copy_legacy(legacy_snapshot, folder)
+    else:
+        folder.mkdir()
         try:
             _unpack(archive, folder)
         except BadZipFile as error:
             raise ValueError("Invalid backup ZIP") from error
-        manifest = backups._read_manifest(folder / "manifest.json")
-        if manifest.get("schema_version") != FORMAT or manifest.get("completed") != "true":
-            raise ValueError("Saved backup is not a complete user archive")
-        expected = {"manifest.json", "checksums.sha256"}
-        expected.update(f"data/{table}.ndjson" for table in USER_TABLES)
-        paths = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
-        if not expected <= paths or any(
-            not re.fullmatch(r"assets/[a-f0-9]{64}/(?:identity\.json|assets/[0-9]+\.bin)", path)
-            for path in paths - expected
-        ):
-            raise ValueError("Saved backup contains unexpected members")
+    manifest = backups._read_manifest(folder / "manifest.json")
+    if manifest.get("completed") != "true":
+        raise ValueError("Saved backup is incomplete")
+    if manifest.get("schema_version") == "7":
+        private_state = stage / "conversion"
+        _restore_folder(private_state, folder, stage)
+        output = stage / "export"
+        output.mkdir()
+        with closing(storage.connect_api2(private_state)) as conn:
+            _export(conn, _asset_root(private_state), output)
+        converted = stage / "user.zip"
+        _zip(output, converted)
+        return converted
+    if manifest.get("schema_version") != FORMAT or legacy_snapshot is not None:
+        raise ValueError("Unsupported saved archive version")
+    expected = {"manifest.json", "checksums.sha256"}
+    expected.update(f"data/{table}.ndjson" for table in USER_TABLES)
+    paths = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
+    if not expected <= paths or any(
+        not re.fullmatch(r"assets/[a-f0-9]{64}/(?:identity\.json|assets/[0-9]+\.bin)", path)
+        for path in paths - expected
+    ):
+        raise ValueError("Saved backup contains unexpected members")
     archive.seek(0)
+    return None
 
 
 def _check_json(text, expected_type, field):

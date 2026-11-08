@@ -5,7 +5,6 @@ import json
 import unittest
 
 from gp_control_plane.http import api_v2
-from gp_control_plane import storage
 from tests.support.api2_http import Api2HttpFixture
 
 
@@ -48,7 +47,7 @@ class Api2AccessTests(Api2HttpFixture, unittest.TestCase):
         status, headers, body = self.call("PUT", PASSWORD, b"{")
         self.assertEqual((status, body["error"]["code"]), (401, "token_invalid"))
         self.assertEqual(headers["WWW-Authenticate"], "Bearer")
-        self.assertFalse(storage.db_path(self.state).exists())
+        self.assertFalse((self.state / "strategy-finder" / "state.sqlite3").exists())
         token = self.login()
         status, _, body = self.call("PUT", PASSWORD + "?extra=1", {
             "username": "", "old_password": 7, "wrong": "synthetic",

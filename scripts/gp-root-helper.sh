@@ -59,12 +59,14 @@ validate_env_assignment() {
   esac
   key="${1%%=*}"
   case "$key" in
-    GP_API2_TRACE)
-      printf '%s\n' "${1#*=}" | grep -Eq '^[0-9a-f]{32}$' || fail "invalid API 2 trace identity"
-      ;;
-    BATCH|DOMAINS|IPVS|TEST|SKIP_DNSCHECK|SKIP_IPBLOCK|ENABLE_HTTP|ENABLE_HTTPS_TLS12|ENABLE_HTTPS_TLS13|ENABLE_HTTP3|SCANLEVEL|REPEATS|PARALLEL|CURL_MAX_TIME|CURL_MAX_TIME_QUIC|CURL_MAX_TIME_DOH|GP_MD_CURL_PARALLELISM|ZAPRET_BASE|ZAPRET_RW) ;;
+    BATCH|DOMAINS|IPVS|TEST|SKIP_DNSCHECK|SKIP_IPBLOCK|ENABLE_HTTP|ENABLE_HTTPS_TLS12|ENABLE_HTTPS_TLS13|ENABLE_HTTP3|SCANLEVEL|REPEATS|PARALLEL|CURL_MAX_TIME|CURL_MAX_TIME_QUIC|CURL_MAX_TIME_DOH|GP_MD_CURL_PARALLELISM|GP_API2_TRACE|ZAPRET_BASE|ZAPRET_RW) ;;
     *) fail "unsupported env key: $key" ;;
   esac
+  if [ "$key" = GP_API2_TRACE ]; then
+    value="${1#*=}"
+    case "$value" in ''|*[!a-f0-9]*) fail "invalid API 2 trace identity" ;; esac
+    [ "${#value}" -eq 32 ] || fail "invalid API 2 trace identity"
+  fi
 }
 
 validate_run_target() {
@@ -2281,6 +2283,8 @@ shift
 case "$command" in
   core-update)
     [ "$#" -eq 2 ] || fail "core-update requires update ID and version"
+    case "$1" in ''|*[!a-f0-9-]*) fail "invalid update UUID" ;; esac
+    case "$2" in ''|*[!a-z0-9.]*) fail "invalid update version" ;; esac
     printf '%s\n' "$1" | grep -Eq '^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$' || fail "invalid update UUID"
     [ "${#2}" -le 64 ] &&
       printf '%s\n' "$2" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)((a|b|rc)(0|[1-9][0-9]*))?(\.post(0|[1-9][0-9]*))?$' ||

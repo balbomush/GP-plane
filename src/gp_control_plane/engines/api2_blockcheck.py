@@ -11,12 +11,15 @@ import shutil
 from tempfile import TemporaryFile
 from uuid import uuid4
 
-from ..discovery_parsing import _protocol_from_test
 from ..strategy_assets import _file_argument
 from ..strategy_finder import (
     DiscoveryOptions, _ipvs_value, _resolve_blockcheck_script, _run_process_with_live_stdout,
 )
 from ..zapret2 import BLOCKCHECK_ENV_KEYS, root_command, root_helper_status
+
+
+_PROTOCOLS = {"curl_test_http": "http", "curl_test_https_tls12": "tls",
+              "curl_test_https_tls13": "tls", "curl_test_http3": "quic"}
 
 
 class _Observations:
@@ -40,7 +43,7 @@ class _Observations:
             words = b64decode(encoded, validate=True).decode("utf-8").split("\0")
             if self.group is not None or words[-1] or not re.fullmatch("[a-f0-9]{64}", identity):
                 raise ValueError("Invalid engine observation")
-            self.group = (identity, _protocol_from_test(probe), words[:-1], {})
+            self.group = (identity, _PROTOCOLS[probe], words[:-1], {})
         elif command == "domain":
             domain, code = arguments.split()
             if self.group is None or domain not in self.job.domains or domain in self.group[3]:
@@ -95,10 +98,15 @@ class BlockcheckEngine:
         scripts = sorted((base / "blockcheck2.d" / "standard").glob("*.sh"))
         if not scripts or not shutil.which("nfqws2") or not shutil.which("curl"):
             raise RuntimeError("Managed blockcheck2 runtime is incomplete")
-        files = [target, helper_path, *scripts, *sorted((base / "lua").glob("*.lua"))]
+        files = [target, helper_path, *scripts]
+        for directory in ("lua", "common", "files", "nfq2", "mdig"):
+            files.extend(sorted(path for path in (base / directory).rglob("*") if path.is_file()))
+        files.extend(path for path in (base / "config", base / "config.default") if path.is_file())
         digest = sha256()
         for path in files:
             with path.open("rb") as file:
+                digest.update(os.fsencode(path.relative_to(base) if path.is_relative_to(base) else path.name))
+                digest.update(b"\0")
                 digest.update(file_digest(file, "sha256").digest())
         return digest.hexdigest()
 
@@ -121,7 +129,7 @@ class BlockcheckEngine:
             "GP_DEBUG_STDOUT": "1" if debug else "0",
         }
         command = root_command(
-            [str(target)], env=env, pass_env_keys=(*BLOCKCHECK_ENV_KEYS, "GP_API2_TRACE"),
+            [str(target)], env=env, pass_env_keys=BLOCKCHECK_ENV_KEYS,
             helper_command="run-multidomain" if job.checkpoint is not None else "run",
             run_id=job.run_id,
         )
@@ -140,6 +148,7 @@ class BlockcheckEngine:
             result = _run_process_with_live_stdout(
                 command, env, None, Path(os.devnull), log,
                 0, job.cancel, observer, job.run_id, stdin=replay, stream_stderr=True,
+                preserve_natural_exit=True,
             )
         if result["stopped"]:
             return "stopped"

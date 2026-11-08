@@ -1,6 +1,7 @@
 """Persist one update report across Core restarts and launch the fixed installer."""
 
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ from ..zapret2 import DEFAULT_ROOT_HELPER
 from .operation_admission import OperationBusy
 
 
+_LOG = logging.getLogger(__name__)
 _SCOPE = "gp-control-plane-core-update.scope"
 _VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:(a|b|rc)(0|[1-9][0-9]*))?(?:\.post(0|[1-9][0-9]*))?")
 
@@ -74,8 +76,7 @@ def _launch(update_id, version):
         if not sudo:
             raise OSError("sudo is unavailable")
         command[:0] = [sudo, "-n", "--"]
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 class CoreUpdate:
@@ -183,13 +184,22 @@ class CoreUpdate:
                 self._launching = False
                 slot.__exit__(None, None, None)
                 raise
-            self._worker = Thread(target=self._watch, args=(process, slot), name="api2-core-update", daemon=True)
+            self._worker = Thread(target=self._watch, args=(process, slot, report),
+                                  name="api2-core-update", daemon=True)
             self._worker.start()
             return 202, report
 
-    def _watch(self, process, slot):
+    def _watch(self, process, slot, accepted):
         try:
-            process.wait()
+            code = process.wait()
+            if type(code) is int and code > 0:
+                with self.guard:
+                    if self.probe() is False and self._saved() == accepted:
+                        failed = {**accepted, "state": "failed",
+                                  "error": {"code": "installation_failed", "message": "Установщик завершился ошибкой"}}
+                        _write_private_json_atomic(self.path, failed)
+        except (OSError, ValueError):
+            _LOG.exception("Could not reconcile Core installer exit")
         finally:
             with self.guard:
                 self._launching = False

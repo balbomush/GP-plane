@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
-from tempfile import mkdtemp
+from tempfile import TemporaryDirectory, mkdtemp
 
 from bottle import Bottle, HTTPResponse, request
 
@@ -140,15 +140,20 @@ def register_backups(
         try:
             stack.enter_context(admission.claim("archive_download"))
             stack.enter_context(saved_file())
+            legacy = None
             try:
                 file = stack.enter_context(saved.open("rb"))
             except FileNotFoundError as error:
-                if user_backup.legacy_saved(state_dir) is not None:
-                    raise ApiError(409, "archive_incomplete", "Прежняя копия содержит служебные данные") from error
-                raise ApiError(404, "not_found", "Сохранённой копии нет") from error
+                legacy = user_backup.legacy_saved(state_dir)
+                if legacy is None:
+                    raise ApiError(404, "not_found", "Сохранённой копии нет") from error
+                file = None
             try:
-                user_backup.validate_download(file, saved.parent)
-            except ValueError as error:
+                stage = Path(stack.enter_context(TemporaryDirectory(prefix=".backup-download-", dir=saved.parent)))
+                converted = user_backup.prepare_download(file, legacy, stage)
+                if converted is not None:
+                    file = stack.enter_context(converted.open("rb"))
+            except (ValueError, FileNotFoundError, sqlite3.IntegrityError) as error:
                 raise ApiError(409, "archive_incomplete", "Сохранённая копия не готова к безопасной выдаче") from error
             file.seek(0, 2)
             length = file.tell()

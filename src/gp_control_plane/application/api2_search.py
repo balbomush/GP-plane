@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import json
 import logging
+from os import fstat
 from pathlib import Path
 import re
 from threading import Event, RLock, Thread
@@ -72,17 +73,21 @@ class RunLog:
                 "time": now_iso(), "level": level, "message": line.rstrip("\r\n")[:4096],
             })
 
+    @staticmethod
+    def cursor(run_id, after):
+        owner, _, rest = after.partition(":")
+        generation, _, raw = rest.partition(":")
+        if owner != run_id or not generation or not raw.isascii() or not raw.isdecimal() or len(raw) > 20:
+            raise SearchError(400, "invalid_parameters", "Неверная позиция журнала", "after")
+        return generation, int(raw)
+
     def read(self, after, limit):
         with self.lock:
             floor = max(0, self.count - len(self.entries))
             index = max(floor, self.count - limit)
             truncated = floor > 0
             if after is not None:
-                owner, _, rest = after.partition(":")
-                generation, _, raw = rest.partition(":")
-                if owner != self.run_id or not raw.isascii() or not raw.isdecimal() or len(raw) > 20:
-                    raise SearchError(400, "invalid_parameters", "Неверная позиция журнала", "after")
-                offset = int(raw)
+                generation, offset = self.cursor(self.run_id, after)
                 if generation == self.generation and floor <= offset <= self.count:
                     index, truncated = offset, False
                 else:
@@ -90,6 +95,52 @@ class RunLog:
             entries = list(self.entries)[index - floor:index - floor + limit]
             return {"entries": entries, "next_after": entries[-1]["position"] if entries else after,
                     "truncated": truncated}
+
+
+def _saved_log(path, run_id, cursor, limit):
+    tail = deque(maxlen=limit)
+    following = []
+    matched = False
+    lost = False
+    for chunk in (path.with_suffix(".log.1"), path):
+        try:
+            stream = chunk.open("rb")
+        except FileNotFoundError:
+            continue
+        with stream:
+            # Rotation preserves the file identity while a new file gets a new one.
+            metadata = fstat(stream.fileno())
+            generation = f"saved-{metadata.st_dev:x}-{metadata.st_ino:x}"
+            for line in iter(lambda: stream.readline(65536), b""):
+                if not line.endswith(b"\n"):
+                    if len(line) == 65536:
+                        lost = True
+                        while (remainder := stream.readline(65536)) and not remainder.endswith(b"\n"):
+                            pass
+                    continue
+                if line.startswith(b"# log rotated,"):
+                    lost = True
+                    continue
+                if line.startswith(b"GP-API2 "):
+                    continue
+                position = stream.tell()
+                entry = {"position": f"{run_id}:{generation}:{position}", "time": None,
+                         "level": "info", "message": line.decode("utf-8", "replace").rstrip("\r\n")[:4096]}
+                lost = lost or len(tail) == limit
+                tail.append(entry)
+                if matched:
+                    following.append(entry)
+                    if len(following) == limit:
+                        break
+                elif cursor == (generation, position):
+                    matched = True
+        if len(following) == limit:
+            break
+    if not tail:
+        return None
+    entries = following if matched else list(tail)
+    return {"entries": entries, "next_after": entries[-1]["position"] if entries else tail[-1]["position"],
+            "truncated": not matched and (cursor is not None or lost)}
 
 
 @dataclass
@@ -219,7 +270,14 @@ class SearchController:
                                 summary, journal, self.lock, self._publish)
                 self.active = job
                 worker = Thread(target=self._run, args=(job, slot, ownership), name="api2-search", daemon=True)
-                worker.start()
+                try:
+                    worker.start()
+                except RuntimeError:
+                    error = {"code": "engine_failed", "message": "Не удалось запустить поиск"}
+                    with connect_api2(self.state_dir) as conn:
+                        conn.execute("UPDATE runs SET status='failed', error_json=?, finished_at=? WHERE id=?",
+                                     (json.dumps(error), now_iso(), run_id))
+                    raise
                 self._publish()
                 return {"id": run_id, "status": summary["status"]}
         except BaseException:
@@ -357,8 +415,13 @@ class SearchController:
                 raise SearchError(404, "not_found", "Поиск не найден")
         with self.lock:
             journal = self.logs.get(run_id)
-        if journal is not None:
-            return journal.read(after, limit)
-        if after is not None and not after.startswith(run_id + ":"):
-            raise SearchError(400, "invalid_parameters", "Неверная позиция журнала", "after")
-        return {"entries": [], "next_after": None, "truncated": after is not None}
+        cursor = RunLog.cursor(run_id, after) if after is not None else None
+        live = journal.read(after, limit) if journal is not None else None
+        if live is not None and not live["truncated"]:
+            return live
+        if re.fullmatch("[a-f0-9]{32}", run_id):
+            path = self.state_dir / "strategy-finder" / "diagnostics" / f"{run_id}.log"
+            saved = _saved_log(path, run_id, cursor, limit)
+            if saved is not None:
+                return saved
+        return live or {"entries": [], "next_after": None, "truncated": True}

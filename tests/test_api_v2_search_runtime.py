@@ -76,3 +76,17 @@ class Api2SearchRuntimeTests(Api2HttpFixture, unittest.TestCase):
             sleep(0.02)
         self.assertEqual(history["status"], "completed")
         self.assertEqual(self.engine.executions[1]["trail"], [["a" * 64, True]])
+
+        # Restart loses the live buffer but a diagnostic run has a saved tail.
+        diagnostics = self.state / "strategy-finder" / "diagnostics"
+        diagnostics.mkdir()
+        (diagnostics / f"{run_id}.log").write_bytes(b"before restart\nafter restart\n")
+        self.search.logs.clear()
+        path = prefix + f"/data/runs/{run_id}/log"
+        status, _, saved = self.call("GET", path + "?limit=2", b"", token)
+        self.assertEqual(status, 200)
+        self.assertEqual([entry["message"] for entry in saved["entries"]], ["before restart", "after restart"])
+        status, _, following = self.call("GET", path + "?after=" + saved["entries"][0]["position"], b"", token)
+        self.assertEqual(status, 200)
+        self.assertEqual([entry["message"] for entry in following["entries"]], ["after restart"])
+        self.assertFalse(following["truncated"])

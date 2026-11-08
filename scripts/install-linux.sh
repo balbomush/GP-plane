@@ -137,6 +137,22 @@ USER_SWITCH
     mv -T -- /usr/local/libexec/gp-control-plane/install-linux.sh.new /usr/local/libexec/gp-control-plane/install-linux.sh
   fi
   systemctl start "$CORE_UNIT"
+  wait_core_listener
+  update_report succeeded
+  core_user /bin/bash -s -- "$gp_root" "$previous" <<'USER_CLEAN' || printf '%s\n' 'WARNING: previous program cleanup failed' >&2
+set -Eeuo pipefail
+gp_root="$1"; previous="$2"
+old_venv="$(readlink -- "$previous/.venv" || true)"
+rm -rf --one-file-system -- "$previous"
+if [[ "$old_venv" == "$gp_root"/.gp-core-venv.* ]] &&
+   [[ "${old_venv##*.}" =~ ^[a-f0-9]{32}$ ]] && [ -d "$old_venv" ] && [ ! -L "$old_venv" ]; then
+  rm -rf --one-file-system -- "$old_venv"
+fi
+USER_CLEAN
+  printf '%s\n' 'status=success phase=ordinary-install'
+}
+
+wait_core_listener() {
   local attempt pid
   for attempt in {1..50}; do
     pid="$(systemctl show -p MainPID --value "$CORE_UNIT")"
@@ -152,18 +168,6 @@ with request.open(f"http://{host}:{port}/api/health", timeout=1) as response:
         raise SystemExit(1)
 HEALTH
     then
-      update_report succeeded
-      core_user /bin/bash -s -- "$gp_root" "$previous" <<'USER_CLEAN' || printf '%s\n' 'WARNING: previous program cleanup failed' >&2
-set -Eeuo pipefail
-gp_root="$1"; previous="$2"
-old_venv="$(readlink -- "$previous/.venv" || true)"
-rm -rf --one-file-system -- "$previous"
-if [[ "$old_venv" == "$gp_root"/.gp-core-venv.* ]] &&
-   [[ "${old_venv##*.}" =~ ^[a-f0-9]{32}$ ]] && [ -d "$old_venv" ] && [ ! -L "$old_venv" ]; then
-  rm -rf --one-file-system -- "$old_venv"
-fi
-USER_CLEAN
-      printf '%s\n' 'status=success phase=ordinary-install'
       return
     fi
     sleep 0.2
@@ -171,8 +175,7 @@ USER_CLEAN
   fail 'new Core version did not pass the managed listener check'
 }
 
-ordinary_install() {
-  find_managed_core
+lock_maintenance() {
   local gate_parent=/run/gp-control-plane gate=/run/gp-control-plane/gates
   for dir in "$gate_parent" "$gate"; do
     [ ! -L "$dir" ] || fail 'unsafe Core maintenance directory'
@@ -185,6 +188,11 @@ ordinary_install() {
   [ -f "$gate/discovery-update.lock" ] && [ "$(stat -c '%u:%g:%a' "$gate/discovery-update.lock")" = 0:0:600 ] || fail 'unsafe Core maintenance lock'
   exec 9<>"$gate/discovery-update.lock"
   flock -n -x 9 || fail 'Core discovery or maintenance is active'
+}
+
+ordinary_install() {
+  find_managed_core
+  lock_maintenance
   token="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
   [[ "$token" =~ ^[a-f0-9]{32}$ ]] || fail 'could not allocate an installer identity'
   stage="$gp_root/.gp-core-stage.$token"
@@ -302,13 +310,19 @@ pip_user() {
 }
 runuser -u "$INSTALL_USER" -- python3 -m venv "$prepare_dir/python/venv"
 pip_user "$prepare_dir/python/venv/bin/python" download --only-binary=:all: --require-hashes --dest "$prepare_dir/python/wheels" -r "$prepare_dir/python/runtime.lock"
-pip_user "$prepare_dir/python/venv/bin/python" wheel --no-deps --wheel-dir "$prepare_dir/python/wheels" "$SOURCE_DIR"
+core_user /bin/bash -s -- "$SOURCE_DIR" "$prepare_dir/python/source" <<'BUILD_SOURCE'
+set -Eeuo pipefail
+mkdir -- "$2"
+tar -C "$1" --exclude=.git -cf - . | tar --no-same-owner --no-same-permissions -xf - -C "$2"
+BUILD_SOURCE
+pip_user "$prepare_dir/python/venv/bin/python" wheel --no-deps --wheel-dir "$prepare_dir/python/wheels" "$prepare_dir/python/source"
 pip_user "$prepare_dir/python/venv/bin/python" install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
 pip_user "$prepare_dir/python/venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
 pip_user "$prepare_dir/python/venv/bin/python" check
 # Match the prepared package to the already validated source, including future
 # releases. A stale or mismatched wheel must fail before stopping the old GP.
-runuser -u "$INSTALL_USER" -- "$prepare_dir/python/venv/bin/python" -c 'import sys, tomllib, bottle, cheroot; from pathlib import Path; from importlib.metadata import version; from gp_control_plane import __version__; from gp_control_plane.web.docs import openapi_json_bytes; expected = tomllib.loads((Path(sys.argv[1]) / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]; (__version__ == expected == version("gp-access-control-plane")) or sys.exit("ERROR: prepared GP version does not match validated source"); openapi_json_bytes() or sys.exit("ERROR: prepared GP OpenAPI document is empty")' "$SOURCE_DIR"
+expected_version="$(core_user python3 -I -c 'from pathlib import Path; import sys,tomllib; print(tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text())["project"]["version"])' "$SOURCE_DIR")"
+core_user "$prepare_dir/python/venv/bin/python" -I -c 'import sys; from importlib.metadata import version; from gp_control_plane import __version__; from gp_control_plane.http.api_v2.app import _contract; assert __version__ == sys.argv[1] == version("gp-access-control-plane"); assert _contract()' "$expected_version"
 # A GP-owned versioned runtime keeps arbitrary /opt/zapret2 git/release layouts
 # and their settings intact. Existing files are checked, never overwritten.
 zapret_parent=/opt/gp-zapret2
@@ -328,6 +342,12 @@ fi
 runuser -u "$INSTALL_USER" -- python3 "$SOURCE_DIR/scripts/prepare-zapret2.py" --probe --destination "$zapret_dir"
 python3 "$SOURCE_DIR/scripts/check-core-listener.py" --install-dir "$install_dir" --install-user "$INSTALL_USER"
 # Independent Web files and units are outside the Core installation.
+if [ "$(systemctl show --property=LoadState --value "$CORE_UNIT")" != not-found ]; then
+  [ "$(systemctl show --property=User --value "$CORE_UNIT")" = "$INSTALL_USER" ] &&
+    [ "$(systemctl show --property=WorkingDirectory --value "$CORE_UNIT")" = "$install_dir" ] ||
+    fail 'existing Core service does not belong to this installation'
+fi
+lock_maintenance
 phase=activation
 stop_unit() {
   local state
@@ -340,7 +360,7 @@ stop_unit() {
 stop_unit gp-control-plane-core.service
 rm -f -- /etc/systemd/system/gp-control-plane-core.service
 rm -f -- /etc/default/gp-control-plane-core /etc/default/gp-control-plane-root-helper /etc/sudoers.d/gp-control-plane-root-helper
-rm -rf --one-file-system -- /usr/local/libexec/gp-control-plane /run/gp-control-plane "$install_dir" "$state_parent"
+rm -rf --one-file-system -- /usr/local/libexec/gp-control-plane "$install_dir" "$state_parent"
 systemctl daemon-reload
 install -d -o "$INSTALL_USER" -g "$group" "$gp_root" "$install_dir"
 tar -C "$SOURCE_DIR" --exclude=.git -cf - . | tar -C "$install_dir" -xf -
@@ -360,11 +380,6 @@ runuser -u "$INSTALL_USER" -- python3 -m venv "$install_dir/.venv"
 pip_user "$install_dir/.venv/bin/python" install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
 pip_user "$install_dir/.venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
 pip_user "$install_dir/.venv/bin/python" check
-# The v2fly cache is disposable service data.  A network failure must not undo a
-# successful clean install: the authenticated Web action can retry it later.
-if ! runuser -u "$INSTALL_USER" -- env GP_STATE_DIR="$state_dir" "$install_dir/.venv/bin/gp-control-plane" domain-sources prepare-v2fly; then
-  printf '%s\n' 'WARNING: v2fly catalog was not prepared; start the service and retry from the Web interface.' >&2
-fi
 install -d -m 0755 /usr/local/libexec/gp-control-plane
 install -m 0755 "$SOURCE_DIR/scripts/gp-root-helper.sh" /usr/local/libexec/gp-control-plane/gp-root-helper
 install -m 0755 "$SOURCE_DIR/scripts/install-linux.sh" /usr/local/libexec/gp-control-plane/install-linux.sh
@@ -374,7 +389,7 @@ ZAPRET_DIR='$zapret_dir'
 EOF
 chmod 0644 /etc/default/gp-control-plane-root-helper
 cat > /etc/sudoers.d/gp-control-plane-root-helper <<EOF
-# Managed by GP clean installer; runtime discovery only.
+# Managed by GP clean installer; actions are allowlisted by the helper.
 $INSTALL_USER ALL=(root) NOPASSWD: /usr/local/libexec/gp-control-plane/gp-root-helper *
 EOF
 visudo -cf /etc/sudoers.d/gp-control-plane-root-helper >/dev/null || fail 'runtime sudoers rule is invalid'
@@ -402,5 +417,7 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload; systemctl enable --now gp-control-plane-core.service
+systemctl daemon-reload; systemctl enable --now "$CORE_UNIT"
+core_host=127.0.0.1; core_port=8081
+wait_core_listener
 printf '%s\n' 'status=success phase=fresh-install'

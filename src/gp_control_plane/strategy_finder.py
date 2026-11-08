@@ -1497,6 +1497,7 @@ def _run_process_with_live_stdout(
     *,
     stdin=None,
     stream_stderr: bool = False,
+    preserve_natural_exit: bool = False,
 ) -> dict[str, Any]:
     if _stop_requested(stop_event):
         return _stopped_process_result(recorder)
@@ -1567,7 +1568,8 @@ def _run_process_with_live_stdout(
             reader.start()
             deadline = None if timeout_seconds <= 0 else time.monotonic() + timeout_seconds
             while True:
-                if stop_event is not None and stop_event.is_set():
+                cancel_requested = stop_event is not None and stop_event.is_set()
+                if (reader_errors or cancel_requested) and (not preserve_natural_exit or process.poll() is None):
                     try:
                         _stop_process_group(process, run_id)
                         _cleanup_nft_blockcheck_tables()
@@ -1575,8 +1577,8 @@ def _run_process_with_live_stdout(
                         returncode = _wait_process_after_stop(process, run_id)
                     except (RuntimeError, subprocess.TimeoutExpired) as exc:
                         raise ManagedRuntimeQuarantinedError(f"managed process cleanup is unverified: {exc}") from exc
-                    stopped = True
-                    status = "stopped"
+                    stopped = cancel_requested
+                    status = "stopped" if stopped else "failed"
                     break
                 wait_timeout = 1.0
                 if deadline is not None:
@@ -1595,7 +1597,7 @@ def _run_process_with_live_stdout(
                     wait_timeout = min(1.0, remaining)
                 try:
                     returncode = process.wait(timeout=wait_timeout)
-                    if stop_event is not None and stop_event.is_set():
+                    if not preserve_natural_exit and stop_event is not None and stop_event.is_set():
                         stopped = True
                         status = "stopped"
                         if run_id:

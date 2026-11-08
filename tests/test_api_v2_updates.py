@@ -1,5 +1,7 @@
 """Update acceptance persists correlation before invoking the fixed launcher."""
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event
 import unittest
 
@@ -13,9 +15,6 @@ SECOND = "d790f561-275a-47e3-b36f-a55a7b53b1df"
 
 class UpdateTests(unittest.TestCase):
     def test_durable_replay_and_busy_before_preparation(self):
-        from tempfile import TemporaryDirectory
-        from pathlib import Path
-
         with TemporaryDirectory() as root:
             state = Path(root)
             admission = OperationAdmission()
@@ -52,3 +51,17 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(recovered.start(FIRST, "0.5.0")[1]["state"], "unknown")
             self.assertEqual(launches, [(FIRST, "0.5.0")])
             self.assertEqual(preparations, ["0.5.0"])
+
+    def test_confirmed_launcher_failure_leaves_a_terminal_report(self):
+        class RejectedLaunch:
+            def wait(self):
+                return 1
+
+        with TemporaryDirectory() as root:
+            manager = CoreUpdate(Path(root), OperationAdmission(), prepare=lambda *_: 1,
+                                 launch=lambda *_: RejectedLaunch(), probe=lambda: False)
+            self.assertEqual(manager.start(FIRST, "0.5.0")[0], 202)
+            manager._worker.join(3)
+            self.assertFalse(manager._worker.is_alive())
+            self.assertEqual(manager.read(FIRST)["state"], "failed")
+            self.assertEqual(manager.start(FIRST, "0.5.0")[0], 200)

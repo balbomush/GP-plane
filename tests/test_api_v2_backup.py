@@ -6,11 +6,13 @@ from io import BytesIO
 import json
 from pathlib import Path
 from threading import Event
+from time import monotonic, sleep
 from unittest.mock import patch
 import unittest
 from zipfile import ZipFile
 
 from gp_control_plane import storage, user_backup
+from gp_control_plane.application.operation_admission import OperationAdmission
 from gp_control_plane.http import api_v2
 from tests.support.api2_http import Api2HttpFixture
 
@@ -19,12 +21,26 @@ ROOT = "/api/v2/backup"
 LEGACY = Path(__file__).parent / "fixtures" / "api_v2" / "legacy_backup_v7.zip"
 
 
+def wait_for_download_cleanup(fixture, token):
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        status, _, payload = fixture.call("GET", "/api/v2/service/status", b"", token)
+        fixture.assertEqual(status, 200)
+        if not payload["busy"]:
+            return
+        fixture.assertEqual(payload["operation"], "archive_download")
+        sleep(0.02)
+    fixture.fail("backup download did not release its slot")
+
+
 class BackupTests(Api2HttpFixture, unittest.TestCase):
     def configure(self, app):
         api_v2.register_access(app, self.state)
         self.configured = hasattr(api_v2, "register_backups")
         if self.configured:
-            api_v2.register_backups(app, self.state)
+            admission = OperationAdmission()
+            api_v2.register_backups(app, self.state, admission=admission)
+            api_v2.register_service(app, self.state, admission=admission)
 
     def test_saved_copy_is_user_only_and_upload_does_not_replace_it(self):
         self.assertTrue(self.configured, "backup routes are missing")
@@ -45,6 +61,7 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
             self.assertIn(b"preserved.example", all_bytes)
             self.assertNotIn(b"password_hash", all_bytes)
             self.assertNotIn(b"token_secret", all_bytes)
+        wait_for_download_cleanup(self, token)
         status, _, payload = self.call("POST", ROOT + "/restore-file", LEGACY.read_bytes(), token,
                                        "application/octet-stream")
         self.assertEqual((status, payload), (200, {"restored": True}))
@@ -52,6 +69,7 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
             self.assertEqual([row[0] for row in conn.execute("SELECT id FROM milestones")], [0, 1])
             self.assertEqual(conn.execute("SELECT count(*) FROM domains WHERE name='preserved.example'").fetchone()[0], 0)
         self.assertEqual(self.call("GET", ROOT + "/file", b"", token)[2], archived)
+        wait_for_download_cleanup(self, token)
         self.assertEqual(self.call("POST", ROOT + "/restore", b"", token)[2], {"restored": True})
         with storage.connect_api2(self.state) as conn:
             self.assertEqual([row[0] for row in conn.execute("SELECT id FROM milestones")], [1, 2])
@@ -68,8 +86,15 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
         old = LEGACY.read_bytes()
         saved.write_bytes(old)
         status, _, payload = self.call("GET", ROOT + "/file", b"", token)
-        self.assertEqual((status, payload["error"]["code"]), (409, "archive_incomplete"))
+        self.assertEqual(status, 200)
+        self.assertNotEqual(payload, old)
+        with ZipFile(BytesIO(payload)) as converted:
+            self.assertTrue(all("/settings/" not in name for name in converted.namelist()))
         self.assertEqual(saved.read_bytes(), old)
+        wait_for_download_cleanup(self, token)
+        saved.write_bytes(b"incomplete")
+        status, _, payload = self.call("GET", ROOT + "/file", b"", token)
+        self.assertEqual((status, payload["error"]["code"]), (409, "archive_incomplete"))
 
     def test_checksums_do_not_allow_invalid_history_to_replace_state(self):
         token = self.call("POST", "/api/v2/access/authentication", {
