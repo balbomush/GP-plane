@@ -33,7 +33,7 @@ class ApiError(ValueError):
 
 def json_response(payload: dict, status: int = 200, headers: dict | None = None) -> HTTPResponse:
     return HTTPResponse(
-        json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8"),
         status=status, headers={
             **(headers or {}), "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
         },

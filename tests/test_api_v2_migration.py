@@ -152,6 +152,18 @@ class Api2MigrationTests(unittest.TestCase):
         with closing(sqlite3.connect(path)) as conn:
             self.assertEqual(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "11")
 
+    def test_migration_rejects_int_primary_key_without_rowid_alias(self):
+        fixture = (FIXTURES / "legacy_v11.sql").read_text(encoding="utf-8")
+        changed = fixture.replace(
+            "CREATE TABLE domains (\n            id INTEGER PRIMARY KEY AUTOINCREMENT",
+            "CREATE TABLE domains (\n            id INT PRIMARY KEY",
+        )
+        self.assertNotEqual(fixture, changed)
+        with closing(sqlite3.connect(storage.db_path(self.state))) as conn:
+            conn.executescript(changed)
+        with self.assertRaisesRegex(ValueError, "rowid primary key in domains"):
+            self.open_target()
+
     def test_registration_failure_rolls_back_schema_and_rows(self):
         path = self.load_legacy()
         with closing(sqlite3.connect(path)) as conn:

@@ -1,5 +1,6 @@
 """Status and package preparation use the same heavy-operation admission."""
 
+from base64 import urlsafe_b64encode
 from hashlib import sha256
 from io import BytesIO
 from tarfile import TarInfo, open as open_tar
@@ -32,7 +33,20 @@ def _tar_files(entries):
 metadata = b"Metadata-Version: 2.4\r\nName: gp-access-control-plane\r\nVersion: 0.5.0\r\n"
 wheel_bytes = BytesIO()
 with ZipFile(wheel_bytes, "w") as wheel:
-    wheel.writestr("gp_access_control_plane-0.5.0.dist-info/METADATA", metadata)
+    info = "gp_access_control_plane-0.5.0.dist-info"
+    members = {
+        f"{info}/METADATA": metadata, f"{info}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
+        "gp_control_plane/__init__.py": b'__version__ = "0.5.0"\n',
+        "gp_control_plane/cli.py": b"def main():\n    return 0\n",
+        "gp_control_plane/http/openapi.json": b"{}\n",
+    }
+    for name, content in members.items():
+        wheel.writestr(name, content)
+    record = "".join(
+        f"{name},sha256={urlsafe_b64encode(sha256(content).digest()).decode().rstrip('=')},{len(content)}\n"
+        for name, content in members.items()
+    )
+    wheel.writestr(f"{info}/RECORD", record + f"{info}/RECORD,,\n")
 FILES = {
     SOURCE: _tar_files({
         "pyproject.toml": b'[project]\nname="gp-access-control-plane"\nversion="0.5.0"\n',
@@ -89,7 +103,10 @@ class ServiceTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(cached_wheel.read_bytes(), DELIVERY[WHEEL])
 
         cached_wheel.write_bytes(b"damaged")
-        invalid = {**FILES, WHEEL: b"not a wheel"}
+        incomplete = BytesIO()
+        with ZipFile(incomplete, "w") as archive:
+            archive.writestr("gp_access_control_plane-0.5.0.dist-info/METADATA", metadata)
+        invalid = {**FILES, WHEEL: incomplete.getvalue()}
         sums = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in invalid.items()).encode()
         invalid["SHA256SUMS"] = sums
         row["assets"] = [{"name": name, "size": len(data)} for name, data in invalid.items()]

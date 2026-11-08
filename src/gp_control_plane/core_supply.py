@@ -1,5 +1,7 @@
 """Prepare and verify the exact published Core distribution for local use."""
 
+from base64 import urlsafe_b64encode
+import csv
 from email.parser import BytesParser
 from hashlib import file_digest, sha256
 import os
@@ -98,16 +100,47 @@ def _tar_files(path: Path, names: set[str]) -> dict[str, bytes]:
     return selected
 
 
+def _verify_wheel(path: Path, project: str, version: str) -> None:
+    info_dir = project + ".dist-info"
+    required = (
+        f"{info_dir}/METADATA", f"{info_dir}/WHEEL", "gp_control_plane/__init__.py",
+        "gp_control_plane/cli.py", "gp_control_plane/http/openapi.json",
+    )
+    with ZipFile(path) as archive:
+        entries = archive.infolist()
+        if len({item.filename for item in entries}) != len(entries):
+            raise ValueError("Duplicate wheel member")
+        if sum(item.file_size for item in entries) > 4 * _MAX_ASSET:
+            raise ValueError("Wheel expands beyond its limit")
+        record = archive.getinfo(f"{info_dir}/RECORD")
+        if record.file_size > _MAX_ASSET:
+            raise ValueError("Wheel record exceeds its limit")
+        rows = list(csv.reader(archive.read(record).decode("utf-8").splitlines()))
+        if any(len(row) != 3 for row in rows) or len({row[0] for row in rows}) != len(rows):
+            raise ValueError("Invalid wheel record")
+        checksums = {name: (digest, size) for name, digest, size in rows}
+        data = {}
+        for name in required:
+            item = archive.getinfo(name)
+            if item.is_dir() or not 0 < item.file_size <= _MAX_ASSET:
+                raise ValueError("Required wheel member is missing")
+            contents = archive.read(item)
+            digest = urlsafe_b64encode(sha256(contents).digest()).decode("ascii").rstrip("=")
+            if checksums.get(name) != (f"sha256={digest}", str(len(contents))):
+                raise ValueError("Required wheel member does not match its record")
+            data[name] = contents
+        _package_metadata(data[f"{info_dir}/METADATA"], version)
+        wheel = BytesParser().parsebytes(data[f"{info_dir}/WHEEL"], headersonly=True)
+        if wheel.get("Wheel-Version") != "1.0" or "py3-none-any" not in wheel.get_all("Tag", []):
+            raise ValueError("Unexpected wheel compatibility")
+
+
 def _verify_identity(root: Path, version: str, source: str) -> None:
     project = f"gp_access_control_plane-{version}"
     wheel = root / f"{project}-py3-none-any.whl"
     sdist = root / f"{project}.tar.gz"
     try:
-        with ZipFile(wheel) as archive:
-            metadata = archive.getinfo(f"{project}.dist-info/METADATA")
-            if metadata.file_size > _MAX_SUMS:
-                raise ValueError("Wheel metadata exceeds its limit")
-            _package_metadata(archive.read(metadata), version)
+        _verify_wheel(wheel, project, version)
         info = f"{project}/PKG-INFO"
         _package_metadata(_tar_files(sdist, {info})[info], version)
         tree = _tar_files(root / source, {"pyproject.toml", "scripts/install-linux.sh"})

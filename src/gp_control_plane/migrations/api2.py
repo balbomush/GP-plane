@@ -74,8 +74,14 @@ def _validate_retained_keys(conn: sqlite3.Connection, version: int) -> None:
             for _, index, unique, _, partial in conn.execute(f"PRAGMA index_list({table})")
         ):
             raise ValueError(f"Unexpected v{version} unique key in {table}")
-        if {row[1] for row in conn.execute(f"PRAGMA table_info({table})") if row[5]} != {"id"}:
-            raise ValueError(f"Unexpected v{version} primary key in {table}")
+        primary_key = [(row[1], row[2].upper(), row[5]) for row in conn.execute(
+            f"PRAGMA table_info({table})"
+        ) if row[5]]
+        separate_primary_index = any(
+            row[3] == "pk" for row in conn.execute(f"PRAGMA index_list({table})")
+        )
+        if primary_key != [("id", "INTEGER", 1)] or separate_primary_index:
+            raise ValueError(f"Unexpected v{version} rowid primary key in {table}")
 
 def _registrations(conn: sqlite3.Connection) -> list[tuple[int, str]]:
     return [

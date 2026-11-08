@@ -87,7 +87,10 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
         checksums = "snapshot/checksums.sha256"
         del files[checksums]
         runs = "snapshot/data/runs.ndjson"
-        for field, invalid in (("status", "broken"), ("domains_json", "invalid")):
+        for field, invalid in (
+            ("status", "broken"), ("domains_json", "invalid"),
+            ("parameters_json", '{"test":NaN}'), ("parameters_json", '{"test":1e999}'),
+        ):
             with self.subTest(field=field):
                 row = json.loads(files[runs])
                 original = files[runs]
@@ -119,9 +122,13 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
         prior = saved.read_bytes()
         with storage.connect_api2(self.state) as conn:
             conn.execute("INSERT INTO domains(name) VALUES('changed.example')")
-        with patch.object(user_backup.backups, "_fsync_directory", side_effect=OSError("sync refused")):
+        with patch.object(user_backup.backups, "_fsync_directory", side_effect=OSError("sync refused")) as sync:
             self.assertEqual(self.call("POST", ROOT, b"", token)[0], 500)
+            sync.assert_called_once_with(saved.parent)
         self.assertEqual(saved.read_bytes(), prior)
+        self.assertEqual(self.call("POST", ROOT, b"", token)[0], 200)
+        self.assertNotEqual(saved.read_bytes(), prior)
+        prior = saved.read_bytes()
         entered, release = Event(), Event()
         real_restore = user_backup.restore
 
@@ -141,3 +148,17 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
                 release.set()
             self.assertEqual(request.result(5)[0], 200)
         self.assertEqual(saved.read_bytes(), prior)
+        with storage.connect_api2(self.state) as conn:
+            conn.execute("INSERT INTO domains(name) VALUES('after-cleanup-error.example')")
+        original_rmtree = user_backup.shutil.rmtree
+
+        def fail_stage_cleanup(path, *args, **kwargs):
+            if Path(path).name.startswith(".user-backup-"):
+                raise PermissionError("test staged cleanup")
+            return original_rmtree(path, *args, **kwargs)
+
+        with patch.object(user_backup.shutil, "rmtree", side_effect=fail_stage_cleanup):
+            status, _, metadata = self.call("POST", ROOT, b"", token)
+        self.assertEqual(status, 200)
+        self.assertEqual(sha256(saved.read_bytes()).hexdigest(), metadata["sha256"])
+        self.assertNotEqual(saved.read_bytes(), prior)

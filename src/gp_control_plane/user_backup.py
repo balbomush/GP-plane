@@ -1,13 +1,15 @@
 """The user-data subset of the Core snapshot archive for API 2."""
 
 from contextlib import closing
+import logging
 from pathlib import Path, PurePosixPath
+import shutil
 import json
 import os
 import re
 import sqlite3
 import stat
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from . import backups, storage, strategy_assets
@@ -80,8 +82,8 @@ def _zip(folder, output):
 def create(state_dir: Path) -> dict:
     destination = saved_path(state_dir)
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix=".user-backup-", dir=destination.parent) as temporary:
-        stage = Path(temporary)
+    stage = Path(mkdtemp(prefix=".user-backup-", dir=destination.parent))
+    try:
         folder = stage / "snapshot"
         folder.mkdir()
         with storage.connect_api2(state_dir) as conn:
@@ -99,7 +101,9 @@ def create(state_dir: Path) -> dict:
         if destination.is_symlink():
             raise ValueError("Unsafe saved backup path")
         if destination.exists():
-            os.link(destination, previous)
+            shutil.copyfile(destination, previous)
+            with previous.open("r+b") as file:
+                os.fsync(file.fileno())
         os.replace(path, destination)
         try:
             backups._fsync_directory(destination.parent)
@@ -109,6 +113,11 @@ def create(state_dir: Path) -> dict:
             else:
                 destination.unlink()
             raise
+    finally:
+        try:
+            shutil.rmtree(stage)
+        except OSError:
+            logging.getLogger(__name__).warning("Backup staging cleanup failed")
     return payload
 
 
@@ -180,6 +189,9 @@ def _check_json(text, expected_type, field):
     value = json.loads(text)
     if not isinstance(value, expected_type):
         raise ValueError(f"Invalid {field}")
+    # The decoder accepts non-finite JSON numbers by default, including
+    # a numeric exponent that overflows float. Reject them at any depth.
+    json.dumps(value, allow_nan=False)
     return value
 
 
