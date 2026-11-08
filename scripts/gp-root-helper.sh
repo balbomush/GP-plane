@@ -830,6 +830,14 @@ gp_md_parallel_limit()
 	echo "$n"
 }
 
+gp_md_repeat_width()
+{
+	local width
+	width="$(gp_md_parallel_limit)"
+	[ "$width" -le "$REPEATS" ] || width="$REPEATS"
+	printf '%s\n' "$width"
+}
+
 gp_md_out_file()
 {
 	echo "${PARALLEL_OUT}_md_$1.out"
@@ -845,11 +853,26 @@ gp_md_run_domain_curl()
 	# $1 - index
 	# $2 - test function
 	# $3 - domain
-	local idx=$1 testf=$2 gp_domain="$3" code out codefile
+	local idx=$1 testf=$2 gp_domain="$3" code out codefile remaining width chunk
 	out="$(gp_md_out_file "$idx")"
 	codefile="$(gp_md_code_file "$idx")"
-	curl_test "$testf" "$gp_domain" >"$out" 2>&1
-	code=$?
+	if [ -n "${GP_API2_TRACE:-}" ] && [ "${PARALLEL:-0}" = 1 ]; then
+		# Upstream curl_test deletes every file under its repeat prefix.
+		# Keep each domain's repeats separate from other domains and their result files.
+		local PARALLEL_OUT="${PARALLEL_OUT}_domain_${idx}_"
+		remaining="$REPEATS"
+		width="$(gp_md_repeat_width)"
+		code=0
+		while [ "$remaining" -gt 0 ]; do
+			chunk="$width"
+			[ "$chunk" -le "$remaining" ] || chunk="$remaining"
+			(REPEATS="$chunk"; curl_test "$testf" "$gp_domain") || code=$?
+			remaining=$((remaining - chunk))
+		done >"$out" 2>&1
+	else
+		curl_test "$testf" "$gp_domain" >"$out" 2>&1
+		code=$?
+	fi
 	echo "$code" >"$codefile"
 	return 0
 }
@@ -903,6 +926,10 @@ pktws_curl_test_update()
 	fi
 	strategy="$*"
 	limit="$(gp_md_parallel_limit)"
+	if [ -n "${GP_API2_TRACE:-}" ] && [ "${PARALLEL:-0}" = 1 ]; then
+		# The domain workers share the API limit with their parallel repeats.
+		limit=$((limit / $(gp_md_repeat_width)))
+	fi
 	rm -f "${PARALLEL_OUT}_md_"*
 
 	echo
@@ -950,7 +977,7 @@ gp_md_run_protocol()
 	# $2 - curl test function
 	# $3 - tcp/udp
 	# $4 - port
-	local func=$1 testf=$2 proto=$3 port=$4 ips primary
+	local func=$1 testf=$2 proto=$3 port=$4 ips primary gp_domain
 	primary="$(gp_md_primary_domain)"
 	[ -n "$primary" ] || return 1
 	ips="$(gp_md_resolve_all_ips)"
@@ -961,6 +988,12 @@ gp_md_run_protocol()
 	}
 
 	echo
+	if [ -n "${GP_API2_TRACE:-}" ] && [ "$proto" = tcp ] && [ "${SKIP_IPBLOCK:-0}" != 1 ]; then
+		for gp_domain in $DOMAINS; do
+			check_domain_port_block "$gp_domain" "$port"
+			check_dpi_ip_block "$testf" "$gp_domain"
+		done
+	fi
 	echo "GP-MULTIDOMAIN preparing $PKTWSD redirection for $proto/$port"
 	case "$proto" in
 		tcp) pktws_ipt_prepare_tcp "$port" "$ips" ;;
