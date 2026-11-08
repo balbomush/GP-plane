@@ -82,6 +82,10 @@ def _validate_retained_keys(conn: sqlite3.Connection, version: int) -> None:
         )
         if primary_key != [("id", "INTEGER", 1)] or separate_primary_index:
             raise ValueError(f"Unexpected v{version} rowid primary key in {table}")
+        sql = conn.execute("SELECT sql FROM sqlite_schema WHERE name=? AND type='table'", (table,)).fetchone()[0]
+        sql = re.sub(r"/\*.*?\*/|--[^\n]*", " ", sql, flags=re.DOTALL)
+        if not re.search(r"\bid\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b", sql, re.IGNORECASE):
+            raise ValueError(f"Unexpected v{version} ID allocation in {table}")
 
 def _registrations(conn: sqlite3.Connection) -> list[tuple[int, str]]:
     return [

@@ -31,29 +31,47 @@ def _tar_files(entries):
 
 
 metadata = b"Metadata-Version: 2.4\r\nName: gp-access-control-plane\r\nVersion: 0.5.0\r\n"
-wheel_bytes = BytesIO()
-with ZipFile(wheel_bytes, "w") as wheel:
-    info = "gp_access_control_plane-0.5.0.dist-info"
-    members = {
-        f"{info}/METADATA": metadata, f"{info}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
-        "gp_control_plane/__init__.py": b'__version__ = "0.5.0"\n',
-        "gp_control_plane/cli.py": b"def main():\n    return 0\n",
-        "gp_control_plane/http/openapi.json": b"{}\n",
-    }
-    for name, content in members.items():
-        wheel.writestr(name, content)
-    record = "".join(
-        f"{name},sha256={urlsafe_b64encode(sha256(content).digest()).decode().rstrip('=')},{len(content)}\n"
-        for name, content in members.items()
-    )
-    wheel.writestr(f"{info}/RECORD", record + f"{info}/RECORD,,\n")
+INFO = "gp_access_control_plane-0.5.0.dist-info"
+MEMBERS = {
+    f"{INFO}/METADATA": metadata, f"{INFO}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
+    f"{INFO}/entry_points.txt": b"[console_scripts]\ngp-control-plane=gp_control_plane.cli:main\n",
+    "gp_control_plane/__init__.py": b'__version__ = "0.5.0"\n',
+    "gp_control_plane/cli.py": b"def main():\n    return 0\n",
+    "gp_control_plane/http/openapi.json": b"{}\n",
+}
+
+
+def _wheel(members):
+    result = BytesIO()
+    with ZipFile(result, "w") as wheel:
+        for name, content in members.items():
+            wheel.writestr(name, content)
+        record = "".join(
+            f"{name},sha256={urlsafe_b64encode(sha256(content).digest()).decode().rstrip('=')},{len(content)}\n"
+            for name, content in members.items()
+        )
+        wheel.writestr(f"{INFO}/RECORD", record + f"{INFO}/RECORD,,\n")
+    return result.getvalue()
+
+
+
+TREE = {
+    "pyproject.toml": (
+        b'[project]\nname="gp-access-control-plane"\nversion="0.5.0"\n'
+        b'[project.scripts]\ngp-control-plane="gp_control_plane.cli:main"\n'
+    ),
+    "setup.py": b"from setuptools import setup\nsetup()\n",
+    "scripts/install-linux.sh": b"#!/bin/bash\n",
+    "src/gp_control_plane/__init__.py": MEMBERS["gp_control_plane/__init__.py"],
+    "src/gp_control_plane/cli.py": MEMBERS["gp_control_plane/cli.py"],
+}
 FILES = {
-    SOURCE: _tar_files({
-        "pyproject.toml": b'[project]\nname="gp-access-control-plane"\nversion="0.5.0"\n',
-        "scripts/install-linux.sh": b"#!/bin/bash\n",
+    SOURCE: _tar_files(TREE),
+    WHEEL: _wheel(MEMBERS),
+    SDIST: _tar_files({
+        "gp_access_control_plane-0.5.0/" + name: data
+        for name, data in {**TREE, "PKG-INFO": metadata}.items()
     }),
-    WHEEL: wheel_bytes.getvalue(),
-    SDIST: _tar_files({"gp_access_control_plane-0.5.0/PKG-INFO": metadata}),
 }
 CHECKSUMS = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in FILES.items()).encode()
 DELIVERY = {**FILES, "SHA256SUMS": CHECKSUMS}
@@ -103,16 +121,20 @@ class ServiceTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(cached_wheel.read_bytes(), DELIVERY[WHEEL])
 
         cached_wheel.write_bytes(b"damaged")
-        incomplete = BytesIO()
-        with ZipFile(incomplete, "w") as archive:
-            archive.writestr("gp_access_control_plane-0.5.0.dist-info/METADATA", metadata)
-        invalid = {**FILES, WHEEL: incomplete.getvalue()}
-        sums = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in invalid.items()).encode()
-        invalid["SHA256SUMS"] = sums
-        row["assets"] = [{"name": name, "size": len(data)} for name, data in invalid.items()]
-        with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])), patch.object(
-            releases, "fetch_release_asset", side_effect=lambda tag, name, size: invalid[name]
+        for file, malformed in (
+            (WHEEL, _wheel({f"{INFO}/METADATA": metadata})),
+            (WHEEL, _wheel({name: content for name, content in MEMBERS.items()
+                            if name != f"{INFO}/entry_points.txt"})),
+            (SDIST, _tar_files({"gp_access_control_plane-0.5.0/PKG-INFO": metadata})),
         ):
-            status, _, body = self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)
-        self.assertEqual((status, body["error"]["code"]), (502, "upstream_error"))
-        self.assertEqual(cached_wheel.read_bytes(), b"damaged")
+            with self.subTest(file=file, size=len(malformed)):
+                invalid = {**FILES, file: malformed}
+                sums = "".join(f"{sha256(data).hexdigest()}  {name}\n" for name, data in invalid.items()).encode()
+                invalid["SHA256SUMS"] = sums
+                row["assets"] = [{"name": name, "size": len(data)} for name, data in invalid.items()]
+                with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])), patch.object(
+                    releases, "fetch_release_asset", side_effect=lambda tag, name, size: invalid[name]
+                ):
+                    status, _, body = self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)
+                self.assertEqual((status, body["error"]["code"]), (502, "upstream_error"))
+                self.assertEqual(cached_wheel.read_bytes(), b"damaged")

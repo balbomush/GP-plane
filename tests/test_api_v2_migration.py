@@ -164,6 +164,18 @@ class Api2MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rowid primary key in domains"):
             self.open_target()
 
+    def test_rejects_layout_that_can_reuse_deleted_list_ids(self):
+        fixture = (FIXTURES / "legacy_v11.sql").read_text(encoding="utf-8")
+        changed = fixture.replace(
+            "CREATE TABLE domain_presets (\n            id INTEGER PRIMARY KEY AUTOINCREMENT",
+            "CREATE TABLE domain_presets (\n            id INTEGER PRIMARY KEY",
+        )
+        self.assertNotEqual(fixture, changed)
+        with closing(sqlite3.connect(storage.db_path(self.state))) as conn:
+            conn.executescript(changed)
+        with self.assertRaisesRegex(ValueError, "ID allocation in domain_presets"):
+            self.open_target()
+
     def test_registration_failure_rolls_back_schema_and_rows(self):
         path = self.load_legacy()
         with closing(sqlite3.connect(path)) as conn:

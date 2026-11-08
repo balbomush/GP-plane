@@ -1,6 +1,7 @@
 """Prepare and verify the exact published Core distribution for local use."""
 
 from base64 import urlsafe_b64encode
+from configparser import ConfigParser, Error as IniError
 import csv
 from email.parser import BytesParser
 from hashlib import file_digest, sha256
@@ -103,7 +104,8 @@ def _tar_files(path: Path, names: set[str]) -> dict[str, bytes]:
 def _verify_wheel(path: Path, project: str, version: str) -> None:
     info_dir = project + ".dist-info"
     required = (
-        f"{info_dir}/METADATA", f"{info_dir}/WHEEL", "gp_control_plane/__init__.py",
+        f"{info_dir}/METADATA", f"{info_dir}/WHEEL", f"{info_dir}/entry_points.txt",
+        "gp_control_plane/__init__.py",
         "gp_control_plane/cli.py", "gp_control_plane/http/openapi.json",
     )
     with ZipFile(path) as archive:
@@ -133,6 +135,18 @@ def _verify_wheel(path: Path, project: str, version: str) -> None:
         wheel = BytesParser().parsebytes(data[f"{info_dir}/WHEEL"], headersonly=True)
         if wheel.get("Wheel-Version") != "1.0" or "py3-none-any" not in wheel.get_all("Tag", []):
             raise ValueError("Unexpected wheel compatibility")
+        entry_points = ConfigParser(interpolation=None)
+        entry_points.read_string(data[f"{info_dir}/entry_points.txt"].decode("utf-8"))
+        if entry_points.get("console_scripts", "gp-control-plane", fallback=None) != "gp_control_plane.cli:main":
+            raise ValueError("Wheel lacks the Core command")
+
+
+def _verify_project(raw: bytes, version: str) -> None:
+    fields = tomllib.loads(raw.decode("utf-8")).get("project", {})
+    scripts = fields.get("scripts", {})
+    if (fields.get("name") != "gp-access-control-plane" or fields.get("version") != version
+            or scripts.get("gp-control-plane") != "gp_control_plane.cli:main"):
+        raise ValueError("Project identity does not match the Core release")
 
 
 def _verify_identity(root: Path, version: str, source: str) -> None:
@@ -141,13 +155,16 @@ def _verify_identity(root: Path, version: str, source: str) -> None:
     sdist = root / f"{project}.tar.gz"
     try:
         _verify_wheel(wheel, project, version)
-        info = f"{project}/PKG-INFO"
-        _package_metadata(_tar_files(sdist, {info})[info], version)
-        tree = _tar_files(root / source, {"pyproject.toml", "scripts/install-linux.sh"})
-        fields = tomllib.loads(tree["pyproject.toml"].decode("utf-8")).get("project", {})
-        if fields.get("name") != "gp-access-control-plane" or fields.get("version") != version:
-            raise ValueError("Source name or version does not match the release")
-    except (BadZipFile, TarError, KeyError, EOFError) as error:
+        files = {
+            "pyproject.toml", "setup.py", "scripts/install-linux.sh",
+            "src/gp_control_plane/__init__.py", "src/gp_control_plane/cli.py",
+        }
+        source_files = _tar_files(root / source, files)
+        package_files = _tar_files(sdist, {f"{project}/{name}" for name in files | {"PKG-INFO"}})
+        _package_metadata(package_files[f"{project}/PKG-INFO"], version)
+        _verify_project(package_files[f"{project}/pyproject.toml"], version)
+        _verify_project(source_files["pyproject.toml"], version)
+    except (BadZipFile, TarError, KeyError, EOFError, IniError) as error:
         raise ValueError("Invalid release package format") from error
 
 
