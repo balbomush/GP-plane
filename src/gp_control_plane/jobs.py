@@ -29,9 +29,10 @@ FINALIZATION_ERROR_MESSAGE_MAX_LENGTH = 512
 class ManagedRuntimeQuarantinedError(RuntimeError):
     """A root-owned runtime could not be proven stopped and must stay blocked."""
 
-    def __init__(self, message: str, *, nft_table: str | None = None):
+    def __init__(self, message: str, *, nft_table: str | None = None, process_confirmed: bool = False):
         super().__init__(message)
         self.nft_table = nft_table
+        self.process_confirmed = process_confirmed
 
 
 @dataclass(frozen=True)

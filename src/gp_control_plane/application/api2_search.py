@@ -314,6 +314,7 @@ class SearchController:
         error = None
         quarantined = False
         nft_table = None
+        process_confirmed = False
         try:
             with self.lock:
                 if job.cancel.is_set():
@@ -327,6 +328,7 @@ class SearchController:
                     update_state(self.state_dir, lambda state: {
                         **state, "current_run_id": job.run_id, "current_run_name": _KINDS[job.code],
                         "current_run_status": "running", "current_run_nft_table": None,
+                        "current_run_process_clean": False,
                     })
             if final != "stopped":
                 final = self.driver.run(job)
@@ -339,6 +341,7 @@ class SearchController:
             quarantined = isinstance(exc, ManagedRuntimeQuarantinedError)
             if quarantined:
                 nft_table = exc.nft_table or job.nft_table
+                process_confirmed = exc.process_confirmed
             error = {"code": "cleanup_unverified" if quarantined else "engine_failed",
                      "message": "Очистка ресурсов не подтверждена" if quarantined else "Поиск завершился ошибкой"}
             _LOG.error("Search %s failed: %s", job.run_id, type(exc).__name__)
@@ -348,6 +351,7 @@ class SearchController:
                     if quarantined:
                         update_state(self.state_dir, lambda state: {
                             **state, "current_run_status": "quarantined", "current_run_nft_table": nft_table,
+                            "current_run_process_clean": process_confirmed,
                         })
                         with connect_api2(self.state_dir) as conn:
                             conn.execute("UPDATE runs SET status='stopping', error_json=? WHERE id=?",
@@ -356,7 +360,7 @@ class SearchController:
                     else:
                         update_state(self.state_dir, lambda state: {
                             **state, "current_run_id": None, "current_run_name": None, "current_run_status": None,
-                            "current_run_nft_table": None,
+                            "current_run_nft_table": None, "current_run_process_clean": False,
                         })
                         ownership.release()
                         finished = now_iso()

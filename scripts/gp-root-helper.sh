@@ -663,6 +663,9 @@ run_owned_process() {
     fail "managed process group could not be safely cleaned up (status $cleanup_status)"
   fi
   trap - EXIT HUP INT TERM
+  if [ -n "${GP_API2_TRACE:-}" ]; then
+    printf 'GP-API2 %s process-clean\n' "$GP_API2_TRACE"
+  fi
   return "$code"
 }
 
@@ -988,7 +991,7 @@ gp_md_run_protocol()
 	# $2 - curl test function
 	# $3 - tcp/udp
 	# $4 - port
-	local func=$1 testf=$2 proto=$3 port=$4 ips primary gp_domain
+	local func=$1 testf=$2 proto=$3 port=$4 ips primary gp_domain diagnostic_parallel
 	primary="$(gp_md_primary_domain)"
 	[ -n "$primary" ] || return 1
 	ips="$(gp_md_resolve_all_ips)"
@@ -1000,9 +1003,14 @@ gp_md_run_protocol()
 
 	echo
 	if [ -n "${GP_API2_TRACE:-}" ] && [ "$proto" = tcp ] && [ "${SKIP_IPBLOCK:-0}" != 1 ]; then
+		diagnostic_parallel="${PARALLEL:-0}"
+		if [ "$diagnostic_parallel" = 1 ] && [ "$REPEATS" -gt "$(gp_md_parallel_limit)" ]; then
+			# Upstream diagnostic curl_test runs outside the strategy worker pool.
+			diagnostic_parallel=0
+		fi
 		for gp_domain in $DOMAINS; do
 			check_domain_port_block "$gp_domain" "$port"
-			check_dpi_ip_block "$testf" "$gp_domain"
+			(PARALLEL="$diagnostic_parallel"; check_dpi_ip_block "$testf" "$gp_domain")
 		done
 	fi
 	echo "GP-MULTIDOMAIN preparing $PKTWSD redirection for $proto/$port"

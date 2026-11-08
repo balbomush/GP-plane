@@ -5,9 +5,9 @@ from ..application.core_update import CoreUpdate
 from ..application.operation_admission import OperationAdmission
 from ..config import AppConfig
 from ..engines.api2_blockcheck import BlockcheckEngine
-from ..state import read_state
+from ..state import read_state, update_state
 from ..storage import connect_api2
-from ..zapret2 import cleanup_owned_nft_table, recover_registered_process_runs
+from ..zapret2 import cleanup_owned_nft_table, recover_quarantined_process_run, recover_registered_process_runs
 from .api_v2.app import create_api2_app
 from .cheroot_connection import WebStreamLifecycle, require_pinned_cheroot
 from .http_runtime import WebHttpRuntime
@@ -25,10 +25,14 @@ def create_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: 
     current = read_state(state_dir)
     table = current.get("current_run_nft_table")
     if table and current.get("current_run_id"):
-        if not recover_registered_process_runs():
+        run_id = current["current_run_id"]
+        if current.get("current_run_status") == "quarantined" and current.get("current_run_process_clean") is not True:
+            recover_quarantined_process_run(run_id)
+            update_state(state_dir, lambda state: {**state, "current_run_process_clean": True})
+        elif not recover_registered_process_runs():
             raise RuntimeError("Managed search process cleanup could not be verified")
         cleanup_owned_nft_table(table)
-        _clear_stale_current_run(config, recovered_quarantine_run_id=current["current_run_id"])
+        _clear_stale_current_run(config, recovered_quarantine_run_id=run_id)
     else:
         _recover_runtime_before_serve(config)
     with connect_api2(state_dir) as conn:

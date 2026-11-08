@@ -32,8 +32,13 @@ class _Observations:
         self.pending = {}
         self.group = None
         self.nft_table = None
+        self.process_confirmed = False
 
     def confirm_cleanup(self):
+        if not self.process_confirmed:
+            raise ManagedRuntimeQuarantinedError(
+                "Managed process cleanup is unverified", nft_table=self.nft_table,
+            )
         if self.nft_table is None:
             return
         try:
@@ -41,6 +46,7 @@ class _Observations:
         except (OSError, RuntimeError, SubprocessError) as error:
             raise ManagedRuntimeQuarantinedError(
                 "Managed blockcheck table cleanup is unverified", nft_table=self.nft_table,
+                process_confirmed=True,
             ) from error
 
     def mark_phase(self, phase):
@@ -51,7 +57,9 @@ class _Observations:
             self.job.log(line)
             return
         command, _, arguments = line.rstrip("\r\n").removeprefix(self.prefix).partition(" ")
-        if command == "table":
+        if command == "process-clean" and not arguments and not self.process_confirmed:
+            self.process_confirmed = True
+        elif command == "table":
             if self.nft_table is not None or not re.fullmatch(r"blockcheck[1-9][0-9]*", arguments):
                 raise ValueError("Invalid managed blockcheck table observation")
             self.nft_table = arguments
@@ -110,8 +118,9 @@ class BlockcheckEngine:
             raise RuntimeError("Managed blockcheck2 is not ready")
         target = _resolve_blockcheck_script(Path(blockcheck))
         helper_path = Path(str(helper["path"]))
-        if b"GP_API2_TRACE" not in helper_path.read_bytes():
-            raise RuntimeError("Installed helper does not support API 2")
+        helper_source = helper_path.read_bytes()
+        if b"GP_API2_TRACE" not in helper_source or b"GP-API2 %s process-clean" not in helper_source:
+            raise RuntimeError("Installed helper does not provide API 2 cleanup proof")
         base = target.parent
         scripts = sorted((base / "blockcheck2.d" / "standard").glob("*.sh"))
         if not scripts or not shutil.which("nfqws2") or not shutil.which("curl"):

@@ -5,11 +5,14 @@ from http.client import HTTPConnection
 from pathlib import Path
 import json
 import sqlite3
+from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 import unittest
+from unittest.mock import patch
 
 from gp_control_plane.config import build_config
 from gp_control_plane.http.core_runtime import create_core_runtime
+from gp_control_plane.state import write_state
 from gp_control_plane.storage import db_path
 from tests.support.api2_http import Api2HttpFixture
 
@@ -52,6 +55,23 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/auth/login", {})[0], 404)
         status, _, health = self.call("GET", "/api/health", b"")
         self.assertEqual((status, health), (200, {"status": "ok"}))
+
+    def test_restart_requires_proof_for_a_quarantined_process_even_if_nft_is_gone(self):
+        with TemporaryDirectory() as root:
+            state = Path(root) / "restart-state"
+            write_state(state, {
+                "current_run_id": "fixture", "current_run_status": "quarantined",
+                "current_run_nft_table": "blockcheck123",
+            })
+            with patch("gp_control_plane.http.core_runtime.recover_registered_process_runs", return_value=True) as broad, patch(
+                "gp_control_plane.http.core_runtime.cleanup_owned_nft_table",
+            ) as cleanup, patch("gp_control_plane.http.core_runtime.recover_quarantined_process_run",
+                                side_effect=RuntimeError("run proof is missing")) as recover:
+                with self.assertRaisesRegex(RuntimeError, "run proof is missing"):
+                    create_core_runtime(build_config(state), "127.0.0.1", self.port)
+                recover.assert_called_once_with("fixture")
+                broad.assert_not_called()
+                cleanup.assert_not_called()
 
     def test_update_validation_collects_independent_uuid_version_and_query_errors(self):
         base = "/api/v2"
