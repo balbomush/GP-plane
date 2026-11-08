@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .process_registry import validate_run_id
@@ -154,12 +155,16 @@ def clear_install_check_cache() -> None:
         _INSTALL_CHECK_CACHE["expires_at"] = 0.0
 
 
-def _stop_process_group(process: subprocess.Popen[str], run_id: str | None = None) -> None:
+def _stop_process_group(
+    process: subprocess.Popen[str], run_id: str | None = None, *, before_ack: Callable[[], None] | None = None,
+) -> bool:
     if process.poll() is not None:
-        return
+        return False
     _signal_process_group("TERM", process, run_id)
     try:
         process.wait(timeout=MANAGED_ROOT_LAUNCHER_EXIT_WAIT_SECONDS if run_id else 5)
+        if before_ack is not None:
+            before_ack()
         if run_id:
             acknowledge_registered_process_run_terminal(run_id)
     except subprocess.TimeoutExpired:
@@ -171,6 +176,7 @@ def _stop_process_group(process: subprocess.Popen[str], run_id: str | None = Non
         # locally can orphan the wrapper before its cleanup completes.
         _signal_local_process_group("KILL", process)
         process.wait(timeout=5)
+    return True
 
 
 def root_command(
@@ -332,6 +338,28 @@ def _cleanup_nft_blockcheck_tables() -> None:
         deleted = subprocess.run(command + ["delete", "table", family, table], text=True, capture_output=True, check=False)
         if deleted.returncode != 0:
             _run_root_helper(["nft-delete-blockcheck-table", family, table])
+
+
+def _owned_nft_present(table: str) -> bool:
+    if not re.fullmatch(r"blockcheck[1-9][0-9]*", table):
+        raise ValueError("Invalid managed blockcheck table name")
+    nft = shutil.which("nft")
+    if nft:
+        result = subprocess.run([nft, "list", "tables"], text=True, capture_output=True, check=False, timeout=5)
+        if result.returncode == 0:
+            return ("inet", table) in _blockcheck_nft_tables(result.stdout)
+    result = _run_recovery_root_helper(["nft-list-tables"])
+    if result.returncode != 0:
+        raise RuntimeError("Could not verify managed blockcheck tables")
+    return ("inet", table) in _blockcheck_nft_tables(result.stdout)
+
+
+def cleanup_owned_nft_table(table: str) -> None:
+    if not _owned_nft_present(table):
+        return
+    _run_recovery_root_helper(["nft-delete-blockcheck-table", "inet", table])
+    if _owned_nft_present(table):
+        raise RuntimeError("Managed blockcheck table remains after cleanup")
 
 
 def cleanup_nft_blockcheck_tables() -> None:

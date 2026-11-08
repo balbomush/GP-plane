@@ -767,6 +767,8 @@ class CoreApplicationHttpTests(unittest.TestCase):
 
             with mock.patch.object(web_app.service_api, "prepare_v2fly_local_storage", side_effect=prepare):
                 port = start_server(serve_core, config).port
+                # Keep password derivation outside the timed concurrency window.
+                self.assertEqual(_http_request(port, "/api/core/status")[0], 200)
                 first: dict[str, Any] = {}
 
                 def invoke_first() -> None:
@@ -814,6 +816,7 @@ class CoreApplicationHttpTests(unittest.TestCase):
 
             with mock.patch.object(web_app.service_api, "prepare_v2fly_local_storage", side_effect=prepare):
                 port = start_server(serve_core, config).port
+                self.assertEqual(_http_request(port, "/api/core/status")[0], 200)
                 updater = threading.Thread(
                     target=lambda: _http_request(
                         port,

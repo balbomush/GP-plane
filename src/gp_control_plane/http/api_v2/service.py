@@ -9,7 +9,7 @@ from ...application.core_update import UpdateError, update_identity
 from ...application.operation_admission import OperationAdmission
 from ...resource_budget import JSON_REQUEST_MAX_BYTES
 from .access import authorized
-from .protocol import ApiError, detail, invalid_parameters, json_body, json_response, no_body, required_text_fields
+from .protocol import ApiError, detail, json_body, json_response, no_body, required_text_fields
 from .query import Query
 
 
@@ -89,10 +89,13 @@ def register_service(
     @app.post(_ROOT + "/updates")
     @authorize
     def start_update():
-        body = required_text_fields(json_body(json_limit), ("update_id", "version"))
+        def validate(field, value):
+            if field == "update_id" and update_identity(value) is None:
+                return "Нужен UUID обновления"
+            return None
+
+        body = required_text_fields(json_body(json_limit), ("update_id", "version"), validate=validate)
         key = update_identity(body["update_id"])
-        if key is None:
-            invalid_parameters([detail("body:/update_id", "invalid_value", "Нужен UUID обновления")])
         try:
             status, report = updater.start(key, body["version"])
             return json_response(report, status)

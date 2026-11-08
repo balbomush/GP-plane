@@ -88,7 +88,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .state import active_runtime_payload, append_jsonl, now_iso
 from .jobs import ManagedRuntimeQuarantinedError
@@ -1498,6 +1498,7 @@ def _run_process_with_live_stdout(
     stdin=None,
     stream_stderr: bool = False,
     preserve_natural_exit: bool = False,
+    confirm_cleanup: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     if _stop_requested(stop_event):
         return _stopped_process_result(recorder)
@@ -1566,19 +1567,38 @@ def _run_process_with_live_stdout(
 
             reader = threading.Thread(target=read_stdout, daemon=True)
             reader.start()
+            cleanup_confirmed = False
+
+            def verify_owned_cleanup():
+                nonlocal cleanup_confirmed
+                reader.join(timeout=5)
+                if reader.is_alive():
+                    raise ManagedRuntimeQuarantinedError("managed stdout reader did not terminate")
+                if confirm_cleanup is not None and not cleanup_confirmed:
+                    confirm_cleanup()
+                    cleanup_confirmed = True
+
+            def terminate_owned_process():
+                if confirm_cleanup is not None:
+                    return _stop_process_group(process, run_id, before_ack=verify_owned_cleanup)
+                _stop_process_group(process, run_id)
+                _cleanup_nft_blockcheck_tables()
+                return True
+
             deadline = None if timeout_seconds <= 0 else time.monotonic() + timeout_seconds
             while True:
                 cancel_requested = stop_event is not None and stop_event.is_set()
                 if (reader_errors or cancel_requested) and (not preserve_natural_exit or process.poll() is None):
                     try:
-                        _stop_process_group(process, run_id)
-                        _cleanup_nft_blockcheck_tables()
+                        interrupted = terminate_owned_process()
                         recorder.mark_phase(PHASE_SAVING)
                         returncode = _wait_process_after_stop(process, run_id)
+                    except ManagedRuntimeQuarantinedError:
+                        raise
                     except (RuntimeError, subprocess.TimeoutExpired) as exc:
                         raise ManagedRuntimeQuarantinedError(f"managed process cleanup is unverified: {exc}") from exc
-                    stopped = cancel_requested
-                    status = "stopped" if stopped else "failed"
+                    stopped = cancel_requested and (not preserve_natural_exit or interrupted and returncode != 0)
+                    status = "stopped" if stopped else "success" if returncode == 0 else "failed"
                     break
                 wait_timeout = 1.0
                 if deadline is not None:
@@ -1587,10 +1607,11 @@ def _run_process_with_live_stdout(
                         timed_out = True
                         status = "timeout"
                         try:
-                            _stop_process_group(process, run_id)
-                            _cleanup_nft_blockcheck_tables()
+                            terminate_owned_process()
                             recorder.mark_phase(PHASE_SAVING)
                             returncode = _wait_process_after_stop(process, run_id)
+                        except ManagedRuntimeQuarantinedError:
+                            raise
                         except (RuntimeError, subprocess.TimeoutExpired) as exc:
                             raise ManagedRuntimeQuarantinedError(f"managed process cleanup is unverified: {exc}") from exc
                         break
@@ -1615,9 +1636,7 @@ def _run_process_with_live_stdout(
                     break
                 except subprocess.TimeoutExpired:
                     continue
-            reader.join(timeout=5)
-            if reader.is_alive():
-                raise ManagedRuntimeQuarantinedError("managed stdout reader did not terminate")
+            verify_owned_cleanup()
         finally:
             compact_writer.close()
 

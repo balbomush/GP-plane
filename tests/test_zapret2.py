@@ -3053,7 +3053,7 @@ set -- run-owned "${13}" "${14}" "$4"
         self.assertLess(run_owned.index('write_owned_run_attestation'), run_owned.index('write_owned_run_record'))
         self.assertLess(run_owned.index('write_owned_run_record'), run_owned.index('write_owned_run_go'))
         supervisor_body = run_owned.split("setsid /bin/sh -c '", 1)[1].split("' gp-owned-supervisor", 1)[0]
-        self.assertLess(supervisor_body.index('[ "$go_contents" = "helper-go-v1 $$" ]'), supervisor_body.index('( trap - HUP INT TERM; exec "$@" ) &'))
+        self.assertLess(supervisor_body.index('[ "$go_contents" = "helper-go-v1 $$" ]'), supervisor_body.index('( trap - HUP INT TERM; exec "$@" <&7 7<&- ) &'))
         self.assertIn('stop_unattested_supervisor || return 1', run_owned)
         self.assertIn('kill -TERM "$pid"', run_owned)
         self.assertNotIn('kill -TERM -- "-$pid"', run_owned)

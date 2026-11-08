@@ -6,6 +6,7 @@ from threading import Event
 from uuid import uuid4
 from time import monotonic, sleep
 import unittest
+from unittest.mock import patch
 
 from gp_control_plane.application.api2_search import SearchController
 from gp_control_plane.application.operation_admission import OperationAdmission
@@ -94,6 +95,82 @@ class Api2SearchRuntimeTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([entry["message"] for entry in following["entries"]], ["after restart"])
         self.assertFalse(following["truncated"])
+        (diagnostics / f"{run_id}.log").write_bytes(b"".join(f"entry {i}\n".encode() for i in range(60)))
+        self.assertEqual(len(self.call("GET", path, b"", token)[2]["entries"]), 50)
+
+    def test_stop_reply_keeps_its_execution_when_the_same_id_resumes(self):
+        base = "/api/v2"
+        _, _, login = self.call("POST", base + "/access/authentication",
+                                {"username": "admin", "password": "admin"})
+        token = login["bearer_token"]
+        status, _, accepted = self.call("POST", base + "/engines/blockcheck2-gp/start",
+                                        {"domains": ["test.example"]}, token)
+        self.assertEqual(status, 200)
+        self.assertTrue(self.engine.saved.wait(3))
+        prior = self.search.active
+        entered, release = Event(), Event()
+        summary = self.search._summary
+
+        def hold_reply(execution):
+            if execution is prior and prior.done.is_set():
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("stop reply was not released")
+            return summary(execution)
+
+        with patch.object(self.search, "_summary", side_effect=hold_reply), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.call, "POST", base + "/search/stop", b"", token)
+            try:
+                self.assertTrue(entered.wait(3))
+                status, _, resumed = self.call("POST", base + f"/engines/blockcheck2-gp/runs/{accepted['id']}/resume",
+                                               b"", token)
+                self.assertEqual((status, resumed["id"]), (200, accepted["id"]))
+            finally:
+                release.set()
+            status, _, stopped = pending.result(5)
+        self.assertEqual((status, stopped["run"]["status"], stopped["run"]["id"]),
+                         (200, "stopped", accepted["id"]))
+        self.assertEqual(stopped["run"]["progress"]["checked"], 1)
+        active = self.search.active
+        if active is not None:
+            self.assertTrue(active.done.wait(3))
+        self.assertEqual(self.call("GET", base + f"/data/runs/{accepted['id']}", b"", token)[2]["status"],
+                         "completed")
+
+    def test_unconfirmed_cleanup_protects_run_and_milestone(self):
+        from gp_control_plane.jobs import ManagedRuntimeQuarantinedError
+
+        base = "/api/v2"
+        _, _, login = self.call("POST", base + "/access/authentication",
+                                {"username": "admin", "password": "admin"})
+        token = login["bearer_token"]
+
+        def fail_cleanup(job):
+            raise ManagedRuntimeQuarantinedError("synthetic unconfirmed cleanup")
+
+        self.engine.run = fail_cleanup
+        status, _, accepted = self.call("POST", base + "/engines/blockcheck2/start",
+                                        {"domains": ["test.example"]}, token)
+        self.assertEqual(status, 200)
+        active = self.search.active
+        self.assertTrue(active.done.wait(3))
+        run_id = accepted["id"]
+        self.assertEqual(self.call("GET", base + "/search/current", b"", token)[2]["run"]["status"], "stopping")
+        self.assertEqual(self.call("GET", base + f"/data/runs/{run_id}", b"", token)[2]["status"], "stopping")
+        self.assertEqual(self.call("DELETE", base + f"/data/runs/{run_id}", b"", token)[0], 409)
+        self.assertEqual(self.call("POST", base + "/data/milestones", b"", token)[0], 409)
+        self.assertEqual(self.call("POST", base + "/search/stop", b"", token)[0], 503)
+
+    def test_start_with_unknown_domain_list_is_not_found(self):
+        base = "/api/v2"
+        _, _, login = self.call("POST", base + "/access/authentication",
+                                {"username": "admin", "password": "admin"})
+        for engine in ("blockcheck2", "blockcheck2-gp"):
+            status, _, result = self.call("POST", base + f"/engines/{engine}/start", {
+                "domains": ["test.example"], "domain_list_id": 999,
+            }, login["bearer_token"])
+            self.assertEqual((status, result["error"]["code"]), (404, "not_found"))
+        self.assertEqual(self.engine.executions, [])
 
     def test_resume_rechecks_milestone_after_environment_preparation(self):
         prefix = "/api/v2"

@@ -102,7 +102,11 @@ def _saved_log(path, run_id, cursor, limit):
     following = []
     matched = False
     lost = False
+    if path.parent.is_symlink():
+        return None
     for chunk in (path.with_suffix(".log.1"), path):
+        if chunk.is_symlink():
+            continue
         try:
             stream = chunk.open("rb")
         except FileNotFoundError:
@@ -158,6 +162,11 @@ class Execution:
     cancel: Event = field(default_factory=_CancellationToken)
     done: Event = field(default_factory=Event)
     cleanup_confirmed: bool = False
+    nft_table: str | None = None
+
+    def remember_nft_table(self, table):
+        update_state(self.state_dir, lambda state: {**state, "current_run_nft_table": table})
+        self.nft_table = table
 
     def log(self, line, level="info"):
         self.journal.append(line, level)
@@ -294,7 +303,7 @@ class SearchController:
         if preset is None:
             return None
         if conn.execute("SELECT 1 FROM domain_presets WHERE id=?", (preset,)).fetchone() is None:
-            raise SearchError(400, "invalid_parameters", "Список доменов не найден", "domain_list_id")
+            raise SearchError(404, "not_found", "Список доменов не найден")
         names = {row[0] for row in conn.execute(
             "SELECT d.name FROM preset_domains p JOIN domains d ON d.id=p.domain_id WHERE p.preset_id=?", (preset,)
         )}
@@ -304,6 +313,7 @@ class SearchController:
         final = "failed"
         error = None
         quarantined = False
+        nft_table = None
         try:
             with self.lock:
                 if job.cancel.is_set():
@@ -316,7 +326,7 @@ class SearchController:
                     self._publish()
                     update_state(self.state_dir, lambda state: {
                         **state, "current_run_id": job.run_id, "current_run_name": _KINDS[job.code],
-                        "current_run_status": "running",
+                        "current_run_status": "running", "current_run_nft_table": None,
                     })
             if final != "stopped":
                 final = self.driver.run(job)
@@ -327,24 +337,33 @@ class SearchController:
         except Exception as exc:
             final = "failed"
             quarantined = isinstance(exc, ManagedRuntimeQuarantinedError)
+            if quarantined:
+                nft_table = exc.nft_table or job.nft_table
             error = {"code": "cleanup_unverified" if quarantined else "engine_failed",
                      "message": "Очистка ресурсов не подтверждена" if quarantined else "Поиск завершился ошибкой"}
             _LOG.error("Search %s failed: %s", job.run_id, type(exc).__name__)
         finally:
             with self.lock:
                 try:
-                    finished = now_iso()
-                    with connect_api2(self.state_dir) as conn:
-                        conn.execute("UPDATE runs SET status=?, error_json=?, finished_at=? WHERE id=?",
-                                     (final, json.dumps(error) if error else None, finished, job.run_id))
-                    job.summary.update(status=final, error=error, finished_at=finished)
                     if quarantined:
-                        update_state(self.state_dir, lambda state: {**state, "current_run_status": "quarantined"})
+                        update_state(self.state_dir, lambda state: {
+                            **state, "current_run_status": "quarantined", "current_run_nft_table": nft_table,
+                        })
+                        with connect_api2(self.state_dir) as conn:
+                            conn.execute("UPDATE runs SET status='stopping', error_json=? WHERE id=?",
+                                         (json.dumps(error), job.run_id))
+                        job.summary.update(status="stopping", error=error)
                     else:
                         update_state(self.state_dir, lambda state: {
                             **state, "current_run_id": None, "current_run_name": None, "current_run_status": None,
+                            "current_run_nft_table": None,
                         })
                         ownership.release()
+                        finished = now_iso()
+                        with connect_api2(self.state_dir) as conn:
+                            conn.execute("UPDATE runs SET status=?, error_json=?, finished_at=? WHERE id=?",
+                                         (final, json.dumps(error) if error else None, finished, job.run_id))
+                        job.summary.update(status=final, error=error, finished_at=finished)
                         job.cleanup_confirmed = True
                 except Exception:
                     _LOG.exception("Failed to finalize search %s", job.run_id)

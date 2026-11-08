@@ -41,6 +41,9 @@ class SourceTests(Api2HttpFixture, unittest.TestCase):
             status, _, content = self.call("POST", SOURCE + "/update", b"", token)
             self.assertEqual((status, content["installed_revision"]), (200, first))
             fetch.assert_called_once_with(first)
+        status, _, categories = self.call("GET", SOURCE + "/categories?limit=1", b"", token)
+        self.assertEqual((status, categories["total"], categories["items"]),
+                         (200, 2, [{"id": "another", "name": "another"}]))
         self.assertEqual(self.call("GET", SOURCE + "/categories/sample/domains", b"", token)[2]["items"],
                          ["one.example"])
         for revision, code, expected in [

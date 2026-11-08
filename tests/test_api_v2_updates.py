@@ -69,6 +69,11 @@ class UpdateTests(unittest.TestCase):
             self.assertFalse(manager._worker.is_alive())
             recovered = CoreUpdate(state, OperationAdmission(), prepare=prepare, launch=launch, probe=lambda: False)
             self.assertEqual(recovered.start(FIRST, "0.5.0")[1]["state"], "unknown")
+            unverified = CoreUpdate(state, OperationAdmission(), prepare=prepare,
+                                    launch=launch, probe=lambda: None)
+            self.assertEqual(unverified.read(FIRST)["state"], "unknown")
+            with self.assertRaises(OperationBusy):
+                unverified.start(SECOND, "0.5.0")
             self.assertEqual(launches, [(FIRST, "0.5.0")])
             self.assertEqual(preparations, ["0.5.0"])
 

@@ -691,6 +691,13 @@ gp_api2_begin()
   gp_api2_digest="${gp_api2_digest%% *}"
 }
 
+gp_api2_record_runtime()
+{
+  if [ "$FWTYPE" = nftables ]; then
+    printf 'GP-API2 %s table %s\n' "$GP_API2_TRACE" "$NFT_TABLE"
+  fi
+}
+
 gp_api2_record_start()
 {
   printf 'GP-API2 %s begin %s %s %s\n' "$GP_API2_TRACE" "$gp_api2_digest" "$gp_api2_test" "$gp_api2_words"
@@ -743,7 +750,11 @@ pktws_curl_test_update()
   return "$gp_code"
 }
 STOCK
-  awk '$0 == "fsleep_setup" { found=1 } found { print } END { if (!found) exit 42 }' "$source" >>"$runner" || exit 126
+  awk '
+    $0 == "fsleep_setup" { found=1 }
+    found { print; if ($0 == "ask_params") { print "gp_api2_record_runtime"; observed++ } }
+    END { if (!found || observed != 1) exit 42 }
+  ' "$source" >>"$runner" || exit 126
   chmod 0700 "$runner" || exit 126
   ( run_owned_process "$run_id" "$runner" "$@" )
 )
@@ -1018,6 +1029,9 @@ trap sigint_cleanup INT
 check_dns
 check_virt
 ask_params
+if [ -n "${GP_API2_TRACE:-}" ]; then
+  gp_api2_record_runtime
+fi
 trap - INT
 
 PID=

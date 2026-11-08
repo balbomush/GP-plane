@@ -76,7 +76,7 @@ def register_search(app, state_dir, search, *, stream_lifecycle=None, json_limit
     def logs(run_id):
         query = Query({"after", "limit"})
         after = query.text("after")
-        limit = query.integer("limit", default=100, minimum=1, maximum=200)
+        limit = query.integer("limit", default=50, minimum=1, maximum=200)
         query.check()
         return json_response(search.log_page(run_id, after, limit))
 

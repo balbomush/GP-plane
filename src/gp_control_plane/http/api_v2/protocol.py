@@ -117,7 +117,7 @@ def object_fields(value: object, allowed: set[str], pointer: str = "body:") -> t
     return value, errors
 
 
-def required_text_fields(value: object, fields: tuple[str, ...]) -> dict:
+def required_text_fields(value: object, fields: tuple[str, ...], *, validate=None) -> dict:
     _, errors = query_fields(set())
     data, body_errors = object_fields(value, set(fields))
     errors.extend(body_errors)
@@ -132,6 +132,10 @@ def required_text_fields(value: object, fields: tuple[str, ...]) -> dict:
                 errors.append(detail(pointer, "empty", "Нужна непустая строка"))
             elif any(0xD800 <= ord(char) <= 0xDFFF for char in data[field]):
                 errors.append(detail(pointer, "invalid_value", "Строка должна быть корректным Unicode"))
+            elif validate is not None:
+                message = validate(field, data[field])
+                if message:
+                    errors.append(detail(pointer, "invalid_value", message))
     invalid_parameters(errors)
     return dict(data)
 

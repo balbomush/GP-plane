@@ -53,6 +53,18 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
         status, _, health = self.call("GET", "/api/health", b"")
         self.assertEqual((status, health), (200, {"status": "ok"}))
 
+    def test_update_validation_collects_independent_uuid_version_and_query_errors(self):
+        base = "/api/v2"
+        _, _, login = self.call("POST", base + "/access/authentication",
+                                {"username": "admin", "password": "migration-fixture-only"})
+        status, _, response = self.call("POST", base + "/service/updates?unexpected=1",
+                                        {"update_id": "invalid uuid"}, login["bearer_token"])
+        self.assertEqual(status, 400)
+        self.assertEqual({(row["field"], row["code"]) for row in response["error"]["details"]}, {
+            ("body:/update_id", "invalid_value"), ("body:/version", "required"),
+            ("query:unexpected", "unknown_parameter"),
+        })
+
     def test_shared_sse_releases_its_two_slots_after_revocation(self):
         base = "/api/v2"
         credentials = {"username": "admin", "password": "migration-fixture-only"}

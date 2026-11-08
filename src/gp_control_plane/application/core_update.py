@@ -113,7 +113,7 @@ class CoreUpdate:
     def _view(self, report):
         if report is None or report["state"] != "running":
             return report
-        if self._launching or self.probe() is not False:
+        if self._launching or self.probe() is True:
             return report
         return {**report, "state": "unknown",
                 "error": {"code": "update_outcome_unknown", "message": "Результат установки не подтверждён"}}

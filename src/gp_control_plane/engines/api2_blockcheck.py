@@ -8,14 +8,16 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+from subprocess import SubprocessError
 from tempfile import TemporaryFile
 from uuid import uuid4
 
+from ..jobs import ManagedRuntimeQuarantinedError
 from ..strategy_assets import _file_argument
 from ..strategy_finder import (
     DiscoveryOptions, _ipvs_value, _resolve_blockcheck_script, _run_process_with_live_stdout,
 )
-from ..zapret2 import BLOCKCHECK_ENV_KEYS, root_command, root_helper_status
+from ..zapret2 import BLOCKCHECK_ENV_KEYS, cleanup_owned_nft_table, root_command, root_helper_status
 
 
 _PROTOCOLS = {"curl_test_http": "http", "curl_test_https_tls12": "tls",
@@ -29,6 +31,17 @@ class _Observations:
         self.prefix = f"GP-API2 {marker} "
         self.pending = {}
         self.group = None
+        self.nft_table = None
+
+    def confirm_cleanup(self):
+        if self.nft_table is None:
+            return
+        try:
+            cleanup_owned_nft_table(self.nft_table)
+        except (OSError, RuntimeError, SubprocessError) as error:
+            raise ManagedRuntimeQuarantinedError(
+                "Managed blockcheck table cleanup is unverified", nft_table=self.nft_table,
+            ) from error
 
     def mark_phase(self, phase):
         pass
@@ -38,7 +51,12 @@ class _Observations:
             self.job.log(line)
             return
         command, _, arguments = line.rstrip("\r\n").removeprefix(self.prefix).partition(" ")
-        if command == "begin":
+        if command == "table":
+            if self.nft_table is not None or not re.fullmatch(r"blockcheck[1-9][0-9]*", arguments):
+                raise ValueError("Invalid managed blockcheck table observation")
+            self.nft_table = arguments
+            self.job.remember_nft_table(arguments)
+        elif command == "begin":
             identity, probe, encoded = arguments.split()
             words = b64decode(encoded, validate=True).decode("utf-8").split("\0")
             if self.group is not None or words[-1] or not re.fullmatch("[a-f0-9]{64}", identity):
@@ -139,6 +157,8 @@ class BlockcheckEngine:
             logs = job.state_dir / "strategy-finder" / "diagnostics"
             logs.mkdir(mode=0o700, parents=True, exist_ok=True)
             log = logs / (job.run_id + ".log")
+            if logs.is_symlink() or log.is_symlink() or log.with_suffix(".log.1").is_symlink():
+                raise ValueError("Unsafe managed diagnostics path")
         with TemporaryFile(mode="w+b") as replay:
             if job.checkpoint is not None:
                 for identity, success in job.checkpoint["trail"]:
@@ -148,7 +168,7 @@ class BlockcheckEngine:
             result = _run_process_with_live_stdout(
                 command, env, None, Path(os.devnull), log,
                 0, job.cancel, observer, job.run_id, stdin=replay, stream_stderr=True,
-                preserve_natural_exit=True,
+                preserve_natural_exit=True, confirm_cleanup=observer.confirm_cleanup,
             )
         if result["stopped"]:
             return "stopped"
