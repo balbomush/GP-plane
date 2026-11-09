@@ -4,8 +4,7 @@ import json
 import re
 import subprocess
 from typing import Any, Callable
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+from .downloads import get_bytes
 
 
 REPO_URL = "https://github.com/balbomush/GP-plane.git"
@@ -95,9 +94,10 @@ def release_channel_info(
 
 
 def fetch_github_releases() -> str:
-    request = Request(RELEASES_API_URL, headers={"Accept": "application/vnd.github+json", "User-Agent": "gp-control-plane"})
-    with urlopen(request, timeout=20) as response:  # noqa: S310
-        return response.read().decode("utf-8", errors="replace")
+    return get_bytes(
+        RELEASES_API_URL, limit=8 * 1024 * 1024, timeout=20,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "gp-control-plane"},
+    ).decode("utf-8", errors="replace")
 
 
 def fetch_git_tags() -> str:
@@ -203,7 +203,7 @@ def _release_error_kind(exc: BaseException) -> str:
         return "format"
     if isinstance(exc, subprocess.SubprocessError):
         return "git"
-    if isinstance(exc, (OSError, TimeoutError, URLError)):
+    if isinstance(exc, (OSError, TimeoutError)):
         return "network"
     return "unexpected"
 
@@ -245,9 +245,10 @@ def _prerelease_key(value: str) -> tuple[tuple[int, int | str], ...]:
 def fetch_release_asset(tag: str, name: str, size: int) -> bytes:
     if not re.fullmatch(r"v[A-Za-z0-9.-]+", tag) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
         raise ValueError("Invalid release asset identity")
-    request = Request(f"{RELEASES_PAGE_URL}/download/{tag}/{name}", headers={"User-Agent": "gp-control-plane"})
-    with urlopen(request, timeout=30) as response:
-        data = response.read(size + 1)
+    data = get_bytes(
+        f"{RELEASES_PAGE_URL}/download/{tag}/{name}", limit=size, timeout=30,
+        headers={"User-Agent": "gp-control-plane"},
+    )
     if len(data) != size:
         raise ValueError("Release asset size mismatch")
     return data

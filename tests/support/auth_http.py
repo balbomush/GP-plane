@@ -27,7 +27,7 @@ from gp_control_plane.backups import (  # noqa: E402
 from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.storage import StorageUnavailableError, append_run, db_path
 from gp_control_plane.strategy_finder import _LiveStdoutRecorder, upsert_candidate_event_conn as storage_upsert_candidate_event_conn
-from gp_control_plane.web.api_server import serve
+from tests.support.legacy_http.api_server import serve
 from tests.support.web_process import serve_web_proxy, start_web_process
 
 
@@ -51,7 +51,7 @@ def _serve_core_in_process(
     errors: Any,
 ) -> None:
     """Serve a core role in a spawned interpreter, stopping through an Event."""
-    import gp_control_plane.web.api_server as api_server
+    import tests.support.legacy_http.api_server as api_server
 
     config = AppConfig(output=OutputConfig(state_dir=Path(state_dir_raw)))
     try:
@@ -137,9 +137,9 @@ def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _M
         return start_web_process(port, kwargs["core_url"])
 
     if function.__name__ in {"serve", "serve_core"} and function.__module__ in {
-        "gp_control_plane.web.api_server",
+        "tests.support.legacy_http.api_server",
         "gp_control_plane.web.core_server",
-        "gp_control_plane.http.api_server",
+        "tests.support.legacy_http.api_server",
         "gp_control_plane.http.core_server",
     }:
         from tests.support.api1_runtime import create_core_runtime

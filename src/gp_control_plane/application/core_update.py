@@ -11,6 +11,8 @@ import sys
 from threading import RLock, Thread
 from uuid import UUID
 
+from packaging.version import Version
+
 from .. import __version__, core_supply
 from ..backups import _write_private_json_atomic
 from ..zapret2 import DEFAULT_ROOT_HELPER
@@ -40,10 +42,7 @@ def version_key(version):
     match = _VERSION.fullmatch(version) if len(version) <= 64 else None
     if match is None:
         return None
-    major, minor, patch, pre, ordinal, post = match.groups()
-    return int(major), int(minor), int(patch), {"a": 0, "b": 1, "rc": 2, None: 3}[pre], int(ordinal or 0), (
-        -1 if post is None else int(post)
-    )
+    return Version(version)
 
 
 def _probe_scope():

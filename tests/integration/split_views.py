@@ -36,7 +36,7 @@ def _serve_core_process(
     stream_release: Any,
 ) -> None:
     from gp_control_plane.storage import StorageUnavailableError
-    from gp_control_plane.web import api_server
+    from tests.support.legacy_http import api_server
 
     config = AppConfig(output=OutputConfig(state_dir=Path(state_dir_raw)))
     original_get_payload = api_server.web_views.get_payload

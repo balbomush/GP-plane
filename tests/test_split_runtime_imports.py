@@ -31,7 +31,7 @@ if blocked:
 """
         self._run_clean_python(code)
 
-    def test_serve_core_uses_api_server_without_importing_web_app(self) -> None:
+    def test_serve_core_uses_asgi_without_importing_legacy_http(self) -> None:
         code = """
 import importlib.abc
 import sys
@@ -40,7 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / "src"))
 
 from gp_control_plane.config import AppConfig, OutputConfig
-from gp_control_plane.web import api_server, core_runtime, core_server
+from gp_control_plane.web import core_runtime, core_server
 
 class BlockWebAppImport(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
@@ -59,8 +59,8 @@ with tempfile.TemporaryDirectory() as raw:
     core_server.serve_core(config, host="127.0.0.1", port=18081)
 if "gp_control_plane.web.app" in sys.modules:
     raise SystemExit("web.app was imported")
-if "gp_control_plane.web.api_server" not in sys.modules:
-    raise SystemExit("api_server was not imported")
+if any(name.startswith(("bottle", "cheroot", "tests.support.legacy_http")) for name in sys.modules):
+    raise SystemExit("legacy transport imported")
 """
         self._run_clean_python(code)
 

@@ -204,7 +204,7 @@ def initialize(conn: sqlite3.Connection, v11_registrations: tuple, *, legacy_idl
             return
         if not tables:
             _create(conn)
-            _store_access(conn, auth._initial_settings())
+            _store_access(conn, auth.initial_core_settings())
         elif version == "11":
             if not legacy_idle():
                 raise ValueError("Cannot migrate while a legacy search is active")

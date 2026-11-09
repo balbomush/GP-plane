@@ -1,16 +1,23 @@
 [build-system]
-requires = ["setuptools==84.0.0"]
+requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gp-access-control-plane"
 version = "0.5.0"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 description = "Headless Core API and control plane for zapret2 strategy discovery."
 requires-python = ">=3.11"
 dependencies = [
-    "bottle==0.13.4",
-    "cheroot==11.1.2",
+    "fastapi==0.162.2",
+    "pydantic==2.14.3",
+    "uvicorn==0.54.0",
+    "httpx==0.28.1",
+    "PyJWT==2.15.1",
+    "packaging==26.3",
+    "anyio==4.16.0",
+    "starlette==1.10.0",
 ]
 
 [project.scripts]
@@ -19,8 +26,19 @@ gp-control-plane = "gp_control_plane.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools]
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-
 [tool.setuptools.package-data]
-"gp_control_plane.http" = ["openapi.json", "openapi-v2.json"]
+"gp_control_plane.http" = ["openapi.json"]
+"gp_control_plane.http.api_v2" = ["api-docs.json", "swagger/*.js", "swagger/*.css", "swagger/*.txt", "swagger/LICENSE", "swagger/NOTICE"]
+
+
+[tool.mypy]
+follow_imports = "silent"
+files = [
+    "src/gp_control_plane/application/access.py",
+    "src/gp_control_plane/application/search_spec.py",
+    "src/gp_control_plane/downloads.py",
+    "src/gp_control_plane/http/asgi.py",
+    "src/gp_control_plane/http/api_v2/models.py",
+    "src/gp_control_plane/http/api_v2/protocol.py",
+    "src/gp_control_plane/http/api_v2/search_input.py",
+]

@@ -12,7 +12,10 @@ import tomllib
 from zipfile import BadZipFile, ZipFile
 import re
 from tempfile import TemporaryDirectory
-from urllib.error import HTTPError
+from packaging.tags import Tag
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
+
+from .downloads import DownloadError
 
 from . import releases
 from .backups import _fsync_directory
@@ -20,11 +23,23 @@ from .backups import _fsync_directory
 
 _VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?"
 _TAG = re.compile(r"v" + _VERSION + r"(?:-alpha\.[0-9]+)?")
-_WHEEL = re.compile(r"gp_access_control_plane-(" + _VERSION + r")-py3-none-any\.whl")
 _SOURCE = re.compile(r"core-[0-9a-f]{40}\.tar\.gz")
 _CHECKSUM = re.compile(r"([0-9a-f]{64}) [ *]([A-Za-z0-9_.-]+)")
 _MAX_ASSET = 64 * 1024 * 1024
 _MAX_SUMS = 64 * 1024
+
+
+def _wheel_version(filename: str) -> str | None:
+    try:
+        project, version, build, tags = parse_wheel_filename(filename)
+    except InvalidWheelFilename:
+        return None
+    if project != "gp-access-control-plane" or build or tags != {Tag("py3", "none", "any")}:
+        return None
+    # Match the exact published artifact spelling, not only its normalized identity.
+    if filename != f"gp_access_control_plane-{version}-py3-none-any.whl" or not re.fullmatch(_VERSION, str(version)):
+        return None
+    return str(version)
 
 
 def _release_info(row):
@@ -44,7 +59,7 @@ def _release_info(row):
             return None
         if type(size) is int and 0 < size <= _MAX_ASSET:
             names[name] = size
-    wheels = [(name, match[1]) for name in names if (match := _WHEEL.fullmatch(name))]
+    wheels = [(name, version) for name in names if (version := _wheel_version(name)) is not None]
     sources = [name for name in names if _SOURCE.fullmatch(name)]
     if len(wheels) != 1 or len(sources) != 1 or not 0 < names.get("SHA256SUMS", 0) <= _MAX_SUMS:
         return None
@@ -253,7 +268,4 @@ def prepare(state_dir: Path, version: str) -> int | None:
 
 
 def is_rate_limit(error):
-    return isinstance(error, HTTPError) and (
-        error.code == 429 or error.code == 403 and error.headers is not None
-        and error.headers.get("X-RateLimit-Remaining") == "0"
-    )
+    return isinstance(error, DownloadError) and error.rate_limited

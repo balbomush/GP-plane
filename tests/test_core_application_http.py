@@ -34,9 +34,9 @@ from gp_control_plane.state import read_state, write_state
 from gp_control_plane.storage import SCHEMA_VERSION, append_run, read_app_setting
 import gp_control_plane.strategy_finder as strategy_finder
 from gp_control_plane.strategy_finder import upsert_candidates
-from gp_control_plane.http import api_server as web_app
-from gp_control_plane.http import docs as web_docs
-from gp_control_plane.http import routes as web_routes
+from tests.support.legacy_http import api_server as web_app
+from tests.support.legacy_http import docs as web_docs
+from tests.support.legacy_http import routes as web_routes
 from gp_control_plane.http.core_server import serve_core
 serve = serve_core
 
@@ -3345,7 +3345,7 @@ def _start_captured_server(
 ) -> _CapturedTestServer:
     module = sys.modules[function.__module__]
     if function.__name__ in {"serve", "serve_core"} and function.__module__ in {
-        "gp_control_plane.http.api_server",
+        "tests.support.legacy_http.api_server",
         "gp_control_plane.http.core_server",
     }:
         # A6 moves the Core listener onto the same explicit Cheroot runtime as
@@ -3386,7 +3386,7 @@ def _start_captured_server(
     server_type = _server_type or getattr(module, "ThreadingHTTPServer")
     server_modules = (
         module,
-        importlib.import_module("gp_control_plane.http.api_server"),
+        importlib.import_module("tests.support.legacy_http.api_server"),
     )
     startup_abandoned = threading.Event()
     listeners = _CapturedListenerRegistry(startup_abandoned)

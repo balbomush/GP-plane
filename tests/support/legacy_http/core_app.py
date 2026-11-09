@@ -22,10 +22,10 @@ from urllib.parse import parse_qs
 
 from bottle import Bottle, HTTPResponse, request, response
 
-from .. import __version__, core_api, service_api
-from ..application import web_views
-from ..application.discovery import DiscoveryService
-from ..application.web_view_contracts import (
+from gp_control_plane import __version__, core_api, service_api
+from gp_control_plane.application import web_views
+from gp_control_plane.application.discovery import DiscoveryService
+from gp_control_plane.application.web_view_contracts import (
     INTERNAL_AUTH_VERIFY_BEARER_PATH,
     INTERNAL_WEB_EVENTS_SNAPSHOT_PATH,
     INTERNAL_WEB_EVENTS_STREAM_PATH,
@@ -33,8 +33,8 @@ from ..application.web_view_contracts import (
     INTERNAL_WEB_VIEW_POST_PATHS,
     external_web_view_path,
 )
-from ..auth import AuthenticationError, PasswordValidationError, change_password, health_payload, login, require_bearer_token
-from ..backups import (
+from gp_control_plane.auth import AuthenticationError, PasswordValidationError, change_password, health_payload, login, require_bearer_token
+from gp_control_plane.backups import (
     create_post_run_snapshot,
     create_snapshot_if_idle,
     delete_snapshot_if_idle,
@@ -42,13 +42,13 @@ from ..backups import (
     restore_snapshot_if_idle,
     snapshot_file_path,
 )
-from ..config import AppConfig
-from ..resource_budget import BACKUP_STREAM_CHUNK_BYTES, BACKUP_UPLOAD_MAX_BYTES, JSON_REQUEST_MAX_BYTES
-from ..settings import read_run_settings, read_service_settings, save_run_settings
-from ..state import active_job_lock_payload, has_active_runtime
-from ..storage import storage_unavailable_diagnostic
-from ..storage import is_storage_unavailable_error as _is_storage_unavailable_error
-from ..strategy_finder import candidate_storage_version
+from gp_control_plane.config import AppConfig
+from gp_control_plane.resource_budget import BACKUP_STREAM_CHUNK_BYTES, BACKUP_UPLOAD_MAX_BYTES, JSON_REQUEST_MAX_BYTES
+from gp_control_plane.settings import read_run_settings, read_service_settings, save_run_settings
+from gp_control_plane.state import active_job_lock_payload, has_active_runtime
+from gp_control_plane.storage import storage_unavailable_diagnostic
+from gp_control_plane.storage import is_storage_unavailable_error as _is_storage_unavailable_error
+from gp_control_plane.strategy_finder import candidate_storage_version
 from .docs import OPENAPI_JSON_CONTENT_TYPE, SWAGGER_HTML_CONTENT_TYPE, SWAGGER_PATHS, openapi_json_bytes, swagger_ui_html
 from .cheroot_connection import WebStreamLifecycle
 from .errors import error_payload, normalize_error_payload
@@ -62,7 +62,7 @@ NDJSON_CONTENT_TYPE = "application/x-ndjson; charset=utf-8"
 SSE_HEARTBEAT_SECONDS = 15.0
 # Preserve the public operational logger identity while dispatch moved from the
 # compatibility module into this factory.
-_LOGGER = logging.getLogger("gp_control_plane.web.api_server")
+_LOGGER = logging.getLogger("tests.support.legacy_http.api_server")
 
 
 class RuntimeBusyError(RuntimeError):

@@ -4,16 +4,18 @@ from collections.abc import Iterable
 from pathlib import Path
 from tempfile import TemporaryFile
 
-from bottle import Bottle, HTTPResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 
 from ...application.operation_admission import OperationAdmission, OperationBusy
 from ...discovery_domains import classify_domain_input
 from ...repositories import catalog
-from ...storage import connect_api2
+from ...storage import open_api2
 from ... import strategy_assets
-from ..stream_admission import ClosingIterator
+from .openapi import describe
+from .protocol import FileStream
 from .access import authorized
-from .protocol import ApiError, detail, json_response
+from .protocol import ApiError, detail
 from .query import Query, path_id
 
 
@@ -66,7 +68,7 @@ def _stream_file(file) -> Iterable[bytes]:
         yield block
 
 
-def register_catalog(app: Bottle, state_dir: Path, *, admission: OperationAdmission | None = None) -> None:
+def register_catalog(app: FastAPI, state_dir: Path, *, admission: OperationAdmission | None = None) -> None:
     if admission is None:
         admission = OperationAdmission()
     authorize = authorized(state_dir)
@@ -82,45 +84,45 @@ def register_catalog(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
     def register_kind(kind, route, id_field, parse_key):
         is_strategy = kind == "strategy"
 
-        @app.get(_ROOT + route)
+        @app.get(_ROOT + route, **describe("listStrategies" if is_strategy else "listBundles"))
         @authorize
-        def list_all():
+        def list_all(request: Request):
             common = {"domains", "match", "milestone_id", "offset", "limit"}
             if is_strategy:
-                query = Query(common | {"protocol", "family", "q", "engine_code", "sort"})
+                query = Query(request, common | {"protocol", "family", "q", "engine_code", "sort"})
                 filters = {key: query.text(key) for key in ("protocol", "family", "q", "engine_code")}
                 filters["sort"] = query.text("sort", default="id", values={"id", "family"})
             else:
-                query = Query(common | {"view"})
+                query = Query(request, common | {"view"})
                 filters = {"view": query.text("view", default="confirmed", values={"confirmed", "all"})}
             filters["domains"] = _domains(query)
             filters["match"] = query.text("match", default="any", values={"any", "all"})
             requested = query.integer("milestone_id")
             offset, limit = query.page()
             query.check()
-            with connect_api2(state_dir) as conn:
+            with open_api2(state_dir) as conn:
                 conn.execute("BEGIN")
                 chosen = _select_milestone(conn, requested)
-                return json_response(catalog.page(conn, kind, chosen, filters, offset, limit, available=available))
+                return catalog.page(conn, kind, chosen, filters, offset, limit, available=available)
 
-        @app.get(_ROOT + route + "/<" + id_field + ">")
+        @app.get(_ROOT + route + "/{" + id_field + "}", **describe("getStrategy" if is_strategy else "getBundle"))
         @authorize
-        def get(**path):
-            query = Query({"milestone_id"})
-            key = parse_key(path[id_field], query.errors)
+        def get(request: Request):
+            query = Query(request, {"milestone_id"})
+            key = parse_key(request.path_params[id_field], query.errors)
             requested = query.integer("milestone_id")
             query.check()
-            with connect_api2(state_dir) as conn:
+            with open_api2(state_dir) as conn:
                 conn.execute("BEGIN")
                 row = _resource(conn, kind, key)
                 chosen = _select_milestone(conn, requested)
-                return json_response(catalog.view(conn, kind, row, chosen, available=available))
+                return catalog.view(conn, kind, row, chosen, available=available)
 
-        @app.get(_ROOT + route + "/<" + id_field + ">/archive")
+        @app.get(_ROOT + route + "/{" + id_field + "}/archive", **describe("downloadStrategy" if is_strategy else "downloadBundle"))
         @authorize
-        def archive(**path):
-            query = Query(set())
-            key = parse_key(path[id_field], query.errors)
+        def archive(request: Request):
+            query = Query(request, set())
+            key = parse_key(request.path_params[id_field], query.errors)
             query.check()
             operation = admission.claim("archive_download")
             try:
@@ -140,7 +142,7 @@ def register_catalog(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
                     operation.__exit__(None, None, None)
 
             try:
-                with connect_api2(state_dir) as conn:
+                with open_api2(state_dir) as conn:
                     row = _resource(conn, kind, key)
                     try:
                         args, files = _files(assets_root, kind, row, verify=True)
@@ -150,7 +152,7 @@ def register_catalog(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
                 strategy_assets.write_archive(file, kind, args, files)
                 length = file.tell()
                 file.seek(0)
-                return HTTPResponse(ClosingIterator(_stream_file(file), release), headers={
+                return FileStream(_stream_file(file), release, headers={
                     "Content-Type": "application/zip", "Cache-Control": "no-store",
                     "Content-Length": str(length), "Content-Disposition": f'attachment; filename="{kind}.zip"',
                 })

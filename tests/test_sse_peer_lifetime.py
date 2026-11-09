@@ -4,9 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from contextlib import contextmanager
 from unittest.mock import patch
-from gp_control_plane.http.cheroot_connection import WebStreamLifecycle
-from gp_control_plane.http.stream_admission import StreamAdmission
-from gp_control_plane.http.http_runtime import WebHttpRuntime
+from tests.support.legacy_http.cheroot_connection import WebStreamLifecycle
+from tests.support.legacy_http.stream_admission import StreamAdmission
+from tests.support.legacy_http.http_runtime import WebHttpRuntime
 
 @contextmanager
 def pair():
@@ -19,7 +19,7 @@ def pair():
 class PeerLifetimeTests(unittest.TestCase):
     def test_core_event_cancel_interrupts_wait_before_next_auth_tick(self):
         from bottle import request
-        from gp_control_plane.http import core_app
+        from tests.support.legacy_http import core_app
         life=WebStreamLifecycle();services=SimpleNamespace(config=SimpleNamespace(output=SimpleNamespace(state_dir=Path('unused-synthetic-state'))),stream_lifecycle=life)
         request.bind({'REMOTE_ADDR':'127.0.0.1','REMOTE_PORT':'12345'})
         finished=threading.Event()
@@ -56,7 +56,7 @@ class PeerLifetimeTests(unittest.TestCase):
         life=WebStreamLifecycle();closed=[]
         with pair() as (client,server,peer):
             life.bind_peer(peer,server)
-            with patch('gp_control_plane.http.cheroot_connection.select.select',side_effect=AssertionError('inactive peer polled')):life.observe_peers_once()
+            with patch('tests.support.legacy_http.cheroot_connection.select.select',side_effect=AssertionError('inactive peer polled')):life.observe_peers_once()
             life.register(peer,lambda:closed.append(True));client.sendall(b'not-EOF')
             life.observe_peers_once();self.assertEqual([],closed);self.assertEqual(b'not-EOF',server.recv(7))
 
@@ -72,10 +72,10 @@ class PeerLifetimeTests(unittest.TestCase):
         life=WebStreamLifecycle();calls=[]
         with pair() as (_,server,peer):
             life.bind_peer(peer,server);life.register(peer,lambda:calls.append(True))
-            with patch('gp_control_plane.http.cheroot_connection.select.select',side_effect=OSError(errno.EBADF,'unknown')):
+            with patch('tests.support.legacy_http.cheroot_connection.select.select',side_effect=OSError(errno.EBADF,'unknown')):
                 with self.assertRaises(OSError):life.observe_peers_once()
             self.assertEqual([],calls)
-            with patch('gp_control_plane.http.cheroot_connection.select.select',side_effect=ConnectionResetError(errno.ECONNRESET,'peer reset')):life.observe_peers_once()
+            with patch('tests.support.legacy_http.cheroot_connection.select.select',side_effect=ConnectionResetError(errno.ECONNRESET,'peer reset')):life.observe_peers_once()
             self.assertEqual([True],calls)
 
     def test_observer_owned_start_stop_and_eof_wake(self):

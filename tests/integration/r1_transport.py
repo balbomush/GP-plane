@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest import mock
 from gp_control_plane.auth import AuthenticationError
 from gp_control_plane.config import AppConfig,OutputConfig
-from gp_control_plane.http import core_app
-from gp_control_plane.http.cheroot_connection import WebStreamLifecycle
-from gp_control_plane.http.http_runtime import WebHttpRuntime
-from gp_control_plane.http.legacy_http import unsupported_method
+from tests.support.legacy_http import core_app
+from tests.support.legacy_http.cheroot_connection import WebStreamLifecycle
+from tests.support.legacy_http.http_runtime import WebHttpRuntime
+from tests.support.legacy_http.legacy_http import unsupported_method
 from tests.test_core_transport import _free_port,_request,_wait_for_listener
 from tests.integration.a5_transport import _RemoteWebControl
 
@@ -26,7 +26,7 @@ def listeners():
         runtime=WebHttpRuntime(core_app.create_core_app(services,auth),'127.0.0.1',port,stream_lifecycle=lifecycle)
         thread=threading.Thread(target=runtime.serve_forever,daemon=True)
         web=None
-        with mock.patch.object(core_app,'_core_get',return_value=core_app.HTTPResponse(body=b'{}',headers={'Content-Type':'application/json','Content-Length':'2'})),mock.patch('gp_control_plane.http.api_server._event_payloads',return_value={'fixture':{'ok':True}}):
+        with mock.patch.object(core_app,'_core_get',return_value=core_app.HTTPResponse(body=b'{}',headers={'Content-Type':'application/json','Content-Length':'2'})),mock.patch('tests.support.legacy_http.api_server._event_payloads',return_value={'fixture':{'ok':True}}):
             try:
                 thread.start();_wait_for_listener(port)
                 web=_RemoteWebControl(port)

@@ -41,7 +41,7 @@ class PreparedPackageVersionTests(unittest.TestCase):
                 api = root / "gp_control_plane/http/api_v2"
                 api.mkdir(parents=True)
                 (root / "gp_control_plane/__init__.py").write_text(f'__version__ = "{package}"\n', encoding="utf-8")
-                (api / "app.py").write_text(f'def _contract():\n    return {b"{}" if docs else b""!r}\n', encoding="utf-8")
+                (api / "app.py").write_text(f'def verify_package():\n    assert {docs!r}\n', encoding="utf-8")
                 dist = root / "gp_access_control_plane.dist-info"
                 dist.mkdir()
                 (dist / "METADATA").write_text(f'Name: gp-access-control-plane\nVersion: {metadata}\n', encoding="utf-8")
@@ -92,7 +92,9 @@ runuser() {
     *" -m venv "*) [ "$TEST_FAIL" != venv ]; return;;
     *" -m pip download "*) case "$TEST_FAIL" in dependencies|dependency-checksum|dependency-missing) return 65;; *) return 0;; esac;;
     *" -m pip wheel "*) [ "$TEST_FAIL" != wheel ]; return;;
-    *" -m pip install "*) [ "$TEST_FAIL" != package ]; return;;
+    *" -m pip install "*"build.lock"*) [ "$TEST_FAIL" != build-backend ]; return;;
+    *" -m pip install "*"gp-access-control-plane"*) [ "$TEST_FAIL" != package ]; return;;
+    *" -m pip install "*) return 0;;
     *" -m pip check"*) [ "$TEST_FAIL" != dependency-check ]; return;;
     *" /bin/bash -s "*) cat >/dev/null; return 0;;
     *"import sys,tomllib"*) printf '0.5.0\n'; return 0;;
@@ -111,7 +113,7 @@ rm() {
 }
 source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 0000000000000000000000000000000000000001 --web off --mode clean
 '''
-        for failure in ("apt", "network", "checksum", "archive", "architecture", "runtime", "venv", "lock-copy", "dependencies", "dependency-checksum", "dependency-missing", "dependency-check", "wheel", "package", "import", "none"):
+        for failure in ("apt", "network", "checksum", "archive", "architecture", "runtime", "venv", "lock-copy", "dependencies", "dependency-checksum", "dependency-missing", "dependency-check", "build-backend", "wheel", "package", "import", "none"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw); home = root / "home"; source = root / "source"
                 old = home / "gp/GP-access-control-plane"; state = home / "gp/.GP-access-control-plane.data/state"
@@ -121,6 +123,7 @@ source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 00
                 (source / ".git").mkdir(parents=True); (source / "scripts").mkdir()
                 (source / "requirements").mkdir()
                 shutil.copyfile(ROOT / "requirements/a5-transport.lock", source / "requirements/a5-transport.lock")
+                shutil.copyfile(ROOT / "requirements/build.lock", source / "requirements/build.lock")
                 events = root / "events"
                 env = {**os.environ, "TEST_EVENTS": shell_path(events), "TEST_HOME": shell_path(home),
                        "TEST_SOURCE": shell_path(source), "TEST_TMP": shell_path(root), "TEST_FAIL": failure}
@@ -139,6 +142,10 @@ source "$1" --source-dir "$TEST_SOURCE" --install-user gpuser --candidate-sha 00
                     self.assertIn("--no-index", trace)
                     self.assertIn("--require-hashes", trace)
                     self.assertIn("--no-deps", trace)
+                    backend = next(line for line in trace.splitlines() if "-m pip install" in line and "build.lock" in line)
+                    self.assertIn("--only-binary=:all: --require-hashes", backend)
+                    self.assertIn("pip wheel --no-build-isolation", trace)
+                    self.assertLess(trace.index(backend), trace.index("pip wheel --no-build-isolation"))
                 else:
                     self.assertNotIn("PREPARATION_COMPLETE", trace)
 

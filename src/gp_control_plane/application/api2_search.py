@@ -8,13 +8,15 @@ from os import fstat
 from pathlib import Path
 import re
 from threading import Event, RLock, Thread
+from traceback import extract_tb
 from uuid import uuid4
 
 from ..jobs import ManagedRuntimeQuarantinedError, _CancellationToken, _StateDirJobLock
 from ..repositories import catalog, search_history
 from ..state import now_iso, update_state
-from ..storage import connect_api2, save_strategy_check
+from ..storage import open_api2, save_strategy_check
 from .operation_admission import OperationBusy
+from .search_spec import valid_saved_gp
 
 
 _LOG = logging.getLogger(__name__)
@@ -45,12 +47,9 @@ def resume_available(row, milestone):
     if row["engine_code"] != _GP or row["status"] not in ("stopped", "failed") or row["milestone_id"] != milestone:
         return False
     try:
-        from ..http.api_v2.search_input import validate_start
-
         domains = json.loads(row["domains_json"] or "null")
         parameters = json.loads(row["parameters_json"] or "null")
-        effective, errors = validate_start(_GP, {"domains": domains, "parameters": parameters})
-        return not errors and effective["domains"] == domains and effective["parameters"] == parameters and (
+        return valid_saved_gp(domains, parameters) and (
             _checkpoint(row) is not None and re.fullmatch("[a-f0-9]{32}", row["id"]) is not None
         )
     except (TypeError, ValueError):
@@ -222,12 +221,12 @@ class SearchController:
     def start(self, code, spec, *, resume_id=None):
         prior = None
         if resume_id is not None:
-            with connect_api2(self.state_dir) as conn:
+            with open_api2(self.state_dir) as conn:
                 prior = self._resume_input(conn, resume_id)
             spec = {"parameters": json.loads(prior["parameters_json"]), "domains": json.loads(prior["domains_json"]),
                     "domain_list_id": prior["preset_id"]}
         if resume_id is None and spec["domain_list_id"] is not None:
-            with connect_api2(self.state_dir) as conn:
+            with open_api2(self.state_dir) as conn:
                 self._matching_preset(conn, spec)
         active = self.admission.active
         if active is not None:
@@ -244,7 +243,7 @@ class SearchController:
                     ownership = _StateDirJobLock.acquire(self.state_dir, run_id, _KINDS[code])
                 except RuntimeError as error:
                     raise OperationBusy("search") from error
-                with connect_api2(self.state_dir) as conn:
+                with open_api2(self.state_dir) as conn:
                     conn.execute("BEGIN IMMEDIATE")
                     milestone = catalog.milestone(conn, None)
                     checkpoint = {"revision": revision, "trail": []} if code == _GP else None
@@ -283,7 +282,7 @@ class SearchController:
                     worker.start()
                 except RuntimeError:
                     error = {"code": "engine_failed", "message": "Не удалось запустить поиск"}
-                    with connect_api2(self.state_dir) as conn:
+                    with open_api2(self.state_dir) as conn:
                         conn.execute("UPDATE runs SET status='failed', error_json=?, finished_at=? WHERE id=?",
                                      (json.dumps(error), now_iso(), run_id))
                     raise
@@ -321,7 +320,7 @@ class SearchController:
                     final = "stopped"
                 else:
                     started = job.summary["started_at"] or now_iso()
-                    with connect_api2(self.state_dir) as conn:
+                    with open_api2(self.state_dir) as conn:
                         conn.execute("UPDATE runs SET status='running', started_at=? WHERE id=?", (started, job.run_id))
                     job.summary.update(status="running", started_at=started)
                     self._publish()
@@ -353,7 +352,7 @@ class SearchController:
                             **state, "current_run_status": "quarantined", "current_run_nft_table": nft_table,
                             "current_run_process_clean": process_confirmed,
                         })
-                        with connect_api2(self.state_dir) as conn:
+                        with open_api2(self.state_dir) as conn:
                             conn.execute("UPDATE runs SET status='stopping', error_json=? WHERE id=?",
                                          (json.dumps(error), job.run_id))
                         job.summary.update(status="stopping", error=error)
@@ -364,13 +363,18 @@ class SearchController:
                         })
                         ownership.release()
                         finished = now_iso()
-                        with connect_api2(self.state_dir) as conn:
+                        with open_api2(self.state_dir) as conn:
                             conn.execute("UPDATE runs SET status=?, error_json=?, finished_at=? WHERE id=?",
                                          (final, json.dumps(error) if error else None, finished, job.run_id))
                         job.summary.update(status=final, error=error, finished_at=finished)
                         job.cleanup_confirmed = True
-                except Exception:
-                    _LOG.exception("Failed to finalize search %s", job.run_id)
+                except Exception as exc:
+                    _LOG.error("operation=search_finalize run_id=%s error_code=finalize_failed type=%s",
+                               job.run_id, type(exc).__name__)
+                    if _LOG.isEnabledFor(logging.DEBUG):
+                        _LOG.debug("operation=search_finalize run_id=%s traceback=%s", job.run_id, [
+                            (frame.filename, frame.lineno, frame.name) for frame in extract_tb(exc.__traceback__)
+                        ])
                 finally:
                     if job.cleanup_confirmed:
                         self.active = None
@@ -395,7 +399,7 @@ class SearchController:
             if job is None:
                 return {"run": None}
             if not job.done.is_set() and not job.cancel.is_set():
-                with connect_api2(self.state_dir) as conn:
+                with open_api2(self.state_dir) as conn:
                     conn.execute("UPDATE runs SET status='stopping' WHERE id=?", (job.run_id,))
                 job.summary["status"] = "stopping"
                 job.cancel.set()
@@ -403,6 +407,17 @@ class SearchController:
         if not job.done.wait(25) or not job.cleanup_confirmed:
             raise SearchError(503, "cleanup_unverified", "Окончание поиска не подтверждено")
         return {"run": self._summary(job)}
+
+    def shutdown(self) -> None:
+        with self.lock:
+            job = self.active
+            if job is None:
+                return
+            # During service exit no client needs the intermediate SQLite
+            # status. Signal first so an unavailable writer cannot delay it.
+            job.cancel.set()
+        if not job.done.wait(25) or not job.cleanup_confirmed:
+            raise SearchError(503, "cleanup_unverified", "Окончание поиска не подтверждено")
 
     def subscribe(self):
         with self.lock:
@@ -433,7 +448,7 @@ class SearchController:
             return snapshots, False
 
     def log_page(self, run_id, after, limit):
-        with connect_api2(self.state_dir) as conn:
+        with open_api2(self.state_dir) as conn:
             if search_history.read(conn, run_id) is None:
                 raise SearchError(404, "not_found", "Поиск не найден")
         with self.lock:

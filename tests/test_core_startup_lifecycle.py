@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.state import read_state, update_state
-from gp_control_plane.web.api_server import serve
-from gp_control_plane.web import api_server
+from tests.support.legacy_http.api_server import serve
+from tests.support.legacy_http import api_server
 
 
 

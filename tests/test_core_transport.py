@@ -24,7 +24,7 @@ import sys
 
 
 from gp_control_plane.config import AppConfig, OutputConfig
-from gp_control_plane.web.core_app import CoreServices, create_core_app
+from tests.support.legacy_http.core_app import CoreServices, create_core_app
 from gp_control_plane.web.core_runtime import create_core_runtime
 
 

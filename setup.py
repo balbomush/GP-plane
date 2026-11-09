@@ -1,4 +1,4 @@
-"""Copy the sole source OpenAPI contract into the built package."""
+"""Keep the inert API 1 artifact required by the previous bundle verifier."""
 
 from pathlib import Path
 from setuptools import setup
@@ -10,13 +10,13 @@ class BuildPy(build_py):
         super().run()
         target = Path(self.build_lib) / "gp_control_plane" / "http"
         target.mkdir(parents=True, exist_ok=True)
-        for name in ("openapi.json", "openapi-v2.json"):
+        for name in ("openapi.json",):
             self.copy_file(str(Path(__file__).parent / name), str(target / name))
 
     def get_outputs(self, include_bytecode=1):
         return super().get_outputs(include_bytecode) + [
             str(Path(self.build_lib) / "gp_control_plane" / "http" / name)
-            for name in ("openapi.json", "openapi-v2.json")
+            for name in ("openapi.json",)
         ]
 
 

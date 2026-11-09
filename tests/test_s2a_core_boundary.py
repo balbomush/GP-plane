@@ -10,7 +10,7 @@ sys.path.insert(0,str(ROOT/'src'))
 
 class CoreBoundaryTests(unittest.TestCase):
     def test_compatibility_facades_are_same_core_modules(self):
-        for name in ['api_server','core_app','core_runtime','core_server','routes','docs','http_body','cheroot_connection']:
+        for name in ['core_runtime','core_server']:
             with self.subTest(name=name):
                 self.assertIs(importlib.import_module('gp_control_plane.http.'+name),
                               importlib.import_module('gp_control_plane.web.'+name))
@@ -25,7 +25,7 @@ class CoreBoundaryTests(unittest.TestCase):
         from unittest.mock import patch
         from gp_control_plane.http.core_runtime import create_core_runtime
         from gp_control_plane.config import AppConfig, OutputConfig
-        with patch('gp_control_plane.http.api_server._recover_runtime_before_serve') as recover:
+        with patch('gp_control_plane.http.core_runtime._recover_runtime_before_serve') as recover:
             with self.assertRaisesRegex(ValueError,'separately'):
                 create_core_runtime(AppConfig(output=OutputConfig(state_dir=ROOT/'build/not-created-s2a')),'127.0.0.1',0,ui_enabled=True)
             recover.assert_not_called()

@@ -3,32 +3,38 @@
 from collections.abc import Iterable
 from contextlib import ExitStack, contextmanager
 from threading import Lock
+
+from anyio import fail_after, from_thread
+from starlette.requests import ClientDisconnect
 from pathlib import Path
 import re
 import shutil
 import sqlite3
 from tempfile import TemporaryDirectory, mkdtemp
 
-from bottle import Bottle, HTTPResponse, request
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 
 from ... import user_backup
 from ...application.operation_admission import OperationAdmission
 from ...resource_budget import BACKUP_STREAM_CHUNK_BYTES, BACKUP_UPLOAD_MAX_BYTES
-from ..stream_admission import ClosingIterator
+from .openapi import describe
+from .protocol import FileStream
 from .access import authorized
-from .protocol import ApiError, json_response, no_body
+from .protocol import ApiError, no_body
 from .query import Query
 
 
 _ROOT = "/api/v2/backup"
+_UPLOAD_IDLE_TIMEOUT_SECONDS = 30
 
 
-def _file_body_size(limit):
+def _file_body_size(request: Request, limit):
     media_type = request.headers.get("Content-Type", "").partition(";")[0].strip().lower()
     if media_type != "application/octet-stream":
         raise ApiError(415, "unsupported_media_type", "Нужен Content-Type application/octet-stream")
-    raw = request.environ.get("CONTENT_LENGTH", "")
-    if request.environ.get("HTTP_TRANSFER_ENCODING") or not re.fullmatch(r"[0-9]{1,19}", raw):
+    raw = request.headers.get("Content-Length", "")
+    if request.headers.get("Transfer-Encoding") or not re.fullmatch(r"[0-9]{1,19}", raw):
         raise ApiError(400, "invalid_request", "Нужен корректный размер архива")
     size = int(raw)
     if size > limit:
@@ -38,16 +44,21 @@ def _file_body_size(limit):
     return size
 
 
-def _receive(destination, size):
+async def _next_chunk(stream):
+    with fail_after(_UPLOAD_IDLE_TIMEOUT_SECONDS):
+        return await anext(stream, b"")
+
+
+def _receive(request: Request, destination, size):
     remaining = size
-    stream = request.environ["wsgi.input"]
+    stream = request.stream()
     with destination.open("xb") as output:
         while remaining:
             try:
-                data = stream.read(min(remaining, BACKUP_STREAM_CHUNK_BYTES))
+                data = from_thread.run(_next_chunk, stream)
             except TimeoutError as error:
                 raise ApiError(408, "request_timeout", "Приём архива остановился") from error
-            except OSError as error:
+            except (OSError, ClientDisconnect) as error:
                 raise ApiError(400, "invalid_request", "Не удалось принять архив") from error
             if not data or len(data) > remaining:
                 raise ApiError(400, "invalid_request", "Не удалось принять полный архив")
@@ -61,7 +72,7 @@ def _blocks(file) -> Iterable[bytes]:
 
 
 def register_backups(
-    app: Bottle, state_dir: Path, *, admission: OperationAdmission | None = None,
+    app: FastAPI, state_dir: Path, *, admission: OperationAdmission | None = None,
     upload_limit: int = BACKUP_UPLOAD_MAX_BYTES,
 ) -> None:
     if admission is None:
@@ -79,7 +90,7 @@ def register_backups(
         finally:
             saved_lock.release()
 
-    def restore_at(upload_size=None):
+    def restore_at(request: Request, upload_size=None):
         restored = False
         legacy = None
         if upload_size is None and not saved.is_file():
@@ -93,7 +104,7 @@ def register_backups(
             archive = saved
             if upload_size is not None:
                 archive = stage / "incoming.zip"
-                _receive(archive, upload_size)
+                _receive(request, archive, upload_size)
             try:
                 if legacy is None:
                     user_backup.restore(state_dir, archive, stage)
@@ -112,30 +123,30 @@ def register_backups(
                     response["warnings"] = [{
                         "code": "temporary_cleanup_failed", "message": "Не удалось убрать временный архив",
                     }]
-        return json_response(response)
+        return response
 
-    @app.post(_ROOT)
+    @app.post(_ROOT, **describe("createBackup"))
     @authorize
-    def create():
-        no_body()
+    def create(request: Request):
+        no_body(request)
         with admission.claim("backup_create"), saved_file():
             try:
-                return json_response(user_backup.create(state_dir))
+                return user_backup.create(state_dir)
             except user_backup.BackupTooLarge as error:
                 raise ApiError(413, "payload_too_large", "Копия превышает допустимый размер") from error
 
-    @app.delete(_ROOT)
+    @app.delete(_ROOT, **describe("deleteBackup"))
     @authorize
-    def delete():
-        no_body()
+    def delete(request: Request):
+        no_body(request)
         with saved_file():
             user_backup.delete_saved(state_dir)
-        return HTTPResponse(status=204, headers={"Cache-Control": "no-store"})
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
-    @app.get(_ROOT + "/file")
+    @app.get(_ROOT + "/file", **describe("downloadBackup"))
     @authorize
-    def download():
-        no_body()
+    def download(request: Request):
+        no_body(request)
         stack = ExitStack()
         try:
             stack.enter_context(admission.claim("archive_download"))
@@ -158,7 +169,7 @@ def register_backups(
             file.seek(0, 2)
             length = file.tell()
             file.seek(0)
-            return HTTPResponse(ClosingIterator(_blocks(file), stack.close), headers={
+            return FileStream(_blocks(file), stack.close, headers={
                 "Content-Type": "application/octet-stream", "Content-Length": str(length), "Cache-Control": "no-store",
                 "Content-Disposition": 'attachment; filename="gp-plane-backup.zip"',
             })
@@ -166,17 +177,17 @@ def register_backups(
             stack.close()
             raise
 
-    @app.post(_ROOT + "/restore")
+    @app.post(_ROOT + "/restore", **describe("restoreSavedBackup"))
     @authorize
-    def restore():
-        no_body()
+    def restore(request: Request):
+        no_body(request)
         with admission.claim("backup_restore"), saved_file():
-            return restore_at()
+            return restore_at(request)
 
-    @app.post(_ROOT + "/restore-file")
+    @app.post(_ROOT + "/restore-file", **describe("restoreBackupFile"))
     @authorize
-    def restore_file():
-        Query(set(), accepts_body=True).check()
-        size = _file_body_size(upload_limit)
+    def restore_file(request: Request):
+        Query(request, set(), accepts_body=True).check()
+        size = _file_body_size(request, upload_limit)
         with admission.claim("backup_restore"):
-            return restore_at(size)
+            return restore_at(request, size)

@@ -107,13 +107,16 @@ python3 -m venv "$venv"
 export PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1
 if [ -z "$wheel" ]; then
   mkdir -- "$stage/.delivery"
-  "$venv/bin/python" -I -m pip wheel --no-deps --wheel-dir "$stage/.delivery" "$stage"
+  build_venv="$stage/.delivery/.build-venv"
+  python3 -m venv "$build_venv"
+  "$build_venv/bin/python" -I -m pip install --only-binary=:all: --require-hashes -r "$stage/requirements/build.lock"
+  "$build_venv/bin/python" -I -m pip wheel --no-build-isolation --no-deps --wheel-dir "$stage/.delivery" "$stage"
   wheel="$stage/.delivery/gp_access_control_plane-$version-py3-none-any.whl"
 fi
 "$venv/bin/python" -I -m pip install --only-binary=:all: --require-hashes -r "$stage/requirements/a5-transport.lock"
 "$venv/bin/python" -I -m pip install --no-deps "$wheel"
 "$venv/bin/python" -I -m pip check
-"$venv/bin/python" -I -c 'import sys; from gp_control_plane import __version__; from gp_control_plane.http.api_v2.app import _contract; assert __version__ == sys.argv[1]; assert _contract()' "$version"
+"$venv/bin/python" -I -c 'import sys; from gp_control_plane import __version__; from gp_control_plane.http.api_v2.app import verify_package; assert __version__ == sys.argv[1]; verify_package()' "$version"
 rm -rf -- "$stage/.delivery"
 ln -s -- "$venv" "$stage/.venv"
 USER_PREPARE
@@ -281,7 +284,7 @@ case "$(uname -s):$(uname -m)" in
   *) fail 'unsupported Linux architecture; previous GP was preserved';;
 esac
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl dnsutils git iproute2 ipset iptables nftables python3 python3-pip python3-venv sudo
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl dnsutils git iproute2 ipset iptables nftables python3 python3-pip python3-venv sudo
 group="$(id -gn "$INSTALL_USER")"
 prepare_dir="$(mktemp -d /tmp/gp-install-prepare.XXXXXX)"
 publish_dir=
@@ -296,6 +299,8 @@ runuser -u "$INSTALL_USER" -- python3 "$SOURCE_DIR/scripts/prepare-zapret2.py" -
 install -d -m 0700 -o "$INSTALL_USER" -g "$group" "$prepare_dir/python"
 install -m 0644 "$SOURCE_DIR/requirements/a5-transport.lock" "$prepare_dir/python/runtime.lock"
 cmp -s "$SOURCE_DIR/requirements/a5-transport.lock" "$prepare_dir/python/runtime.lock" || fail 'staged Core runtime lock mismatch; previous GP was preserved'
+install -m 0644 "$SOURCE_DIR/requirements/build.lock" "$prepare_dir/python/build.lock"
+cmp -s "$SOURCE_DIR/requirements/build.lock" "$prepare_dir/python/build.lock" || fail 'staged Core build lock mismatch; previous GP was preserved'
 install -d -m 0700 -o "$INSTALL_USER" -g "$group" "$prepare_dir/python/pip-cache" "$prepare_dir/python/pip-tmp"
 # pip must not inherit user/site/global config or redirecting PIP_* options.
 # Preserve only explicit network/proxy trust settings; all writes stay in the
@@ -319,14 +324,15 @@ set -Eeuo pipefail
 mkdir -- "$2"
 tar -C "$1" --exclude=.git -cf - . | tar --no-same-owner --no-same-permissions -xf - -C "$2"
 BUILD_SOURCE
-pip_user "$prepare_dir/python/venv/bin/python" wheel --no-deps --wheel-dir "$prepare_dir/python/wheels" "$prepare_dir/python/source"
+pip_user "$prepare_dir/python/venv/bin/python" install --only-binary=:all: --require-hashes -r "$prepare_dir/python/build.lock"
+pip_user "$prepare_dir/python/venv/bin/python" wheel --no-build-isolation --no-deps --wheel-dir "$prepare_dir/python/wheels" "$prepare_dir/python/source"
 pip_user "$prepare_dir/python/venv/bin/python" install --no-index --find-links "$prepare_dir/python/wheels" --require-hashes -r "$prepare_dir/python/runtime.lock"
 pip_user "$prepare_dir/python/venv/bin/python" install --no-index --no-deps --find-links "$prepare_dir/python/wheels" gp-access-control-plane
 pip_user "$prepare_dir/python/venv/bin/python" check
 # Match the prepared package to the already validated source, including future
 # releases. A stale or mismatched wheel must fail before stopping the old GP.
 expected_version="$(core_user python3 -I -c 'from pathlib import Path; import sys,tomllib; print(tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text())["project"]["version"])' "$SOURCE_DIR")"
-core_user "$prepare_dir/python/venv/bin/python" -I -c 'import sys; from importlib.metadata import version; from gp_control_plane import __version__; from gp_control_plane.http.api_v2.app import _contract; assert __version__ == sys.argv[1] == version("gp-access-control-plane"); assert _contract()' "$expected_version"
+core_user "$prepare_dir/python/venv/bin/python" -I -c 'import sys; from importlib.metadata import version; from gp_control_plane import __version__; from gp_control_plane.http.api_v2.app import verify_package; assert __version__ == sys.argv[1] == version("gp-access-control-plane"); verify_package()' "$expected_version"
 # A GP-owned versioned runtime keeps arbitrary /opt/zapret2 git/release layouts
 # and their settings intact. Existing files are checked, never overwritten.
 zapret_parent=/opt/gp-zapret2

@@ -113,17 +113,7 @@ domain:youtube.com
     def test_fetch_v2fly_category_index_from_archive_lists_data_files(self) -> None:
         archive = _v2fly_archive({"google": "domain:example.com\n", "youtube": "domain:example.com\n"})
 
-        class Response:
-            def __enter__(self) -> "Response":
-                return self
-
-            def __exit__(self, *_: object) -> None:
-                return None
-
-            def read(self) -> bytes:
-                return archive
-
-        with patch("gp_control_plane.domain_sources.urlopen", return_value=Response()):
+        with patch("gp_control_plane.domain_sources.get_bytes", return_value=archive):
             result = fetch_v2fly_category_index_from_archive()
 
         self.assertEqual(parse_v2fly_category_index(result), ["google", "youtube"])
@@ -234,7 +224,7 @@ domain:youtube.com
                 archive_fetcher=lambda: _v2fly_archive({"discord": "domain:discord.com\ndomain:discordcdn.com\n"}),
             )
 
-            with patch("gp_control_plane.domain_sources.urlopen", side_effect=AssertionError("network forbidden")):
+            with patch("gp_control_plane.domain_sources.get_bytes", side_effect=AssertionError("network forbidden")):
                 preview = preview_v2fly_preset(
                     state_dir,
                     scope="finder",

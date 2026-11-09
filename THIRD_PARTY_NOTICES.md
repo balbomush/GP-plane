@@ -4,20 +4,19 @@ MIT в LICENSE относится к собственному коду GP и н�
 компонентов. Новая реализация installer написана самостоятельно; текст скрипта
 из issue №7 не заимствован.
 
-GP устанавливает отдельные Python distributions Bottle 0.13.4 (MIT) и Cheroot
-11.1.2 (BSD-3-Clause). Их лицензии и copyright notices остаются в установленных
-пакетах. Транзитивные jaraco.functools и more-itertools имеют MIT; installer
-сохраняет метаданные фактически разрешённых версий. GP не включает исходники
-этих библиотек в свой wheel.
+GP устанавливает отдельные distributions FastAPI, Pydantic, Uvicorn,
+HTTPX, PyJWT, packaging и их зависимости из закреплённого списка.
+Лицензии и уведомления остаются в установленных distributions.
 
 zapret2 загружается отдельно из [upstream release v1.0.5.2](https://github.com/bol-van/zapret2/releases/tag/v1.0.5.2).
 Содержимое release, включая его лицензионные файлы и уведомления, сохраняется;
 лицензия GP не применяется к этому runtime. Условия upstream относятся также
 к его встроенным сторонним компонентам. Runtime не включается в wheel GP.
 
-Swagger UI загружается браузером из swagger-ui-dist по CDN (Apache-2.0),
-его файлы не включены в пакет GP. Исходник и условия:
-https://github.com/swagger-api/swagger-ui.
+Swagger UI 5.34.1 (Apache-2.0) включён в wheel из точной поставки
+\`swagger-ui-dist@5.34.1\`. В каталоге ресурсов сохраняются upstream LICENSE,
+NOTICE и уведомления зависимостей из bundle. Исходники и версия находятся
+в [репозитории Swagger UI](https://github.com/swagger-api/swagger-ui/tree/v5.34.1).
 
 Каталог v2fly и результаты его обработки — отдельные данные со своими
 условиями источника, а не код GP под MIT. GP сохраняет исходную информацию

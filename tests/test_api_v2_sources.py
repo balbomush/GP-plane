@@ -3,7 +3,7 @@
 from io import BytesIO
 from tarfile import TarInfo, open as open_tar
 from unittest.mock import patch
-from urllib.error import HTTPError
+from gp_control_plane.downloads import DownloadError
 import unittest
 
 from gp_control_plane import domain_sources
@@ -49,7 +49,7 @@ class SourceTests(Api2HttpFixture, unittest.TestCase):
         for revision, code, expected in [
             ("invalid", 502, "upstream_error"),
             ('{"commit":{"tree":{"sha":"' + "c" * 40 + '"}}}', 502, "upstream_error"),
-            (HTTPError("https://example.test", 429, "rate limited", {}, None), 503, "upstream_rate_limited"),
+            (DownloadError(rate_limited=True), 503, "upstream_rate_limited"),
         ]:
             options = {"side_effect": revision} if isinstance(revision, Exception) else {"return_value": revision}
             with self.subTest(code=code), patch.object(domain_sources, "fetch_v2fly_revision", **options):

@@ -133,7 +133,7 @@ def create(state_dir: Path) -> dict:
     try:
         folder = stage / "snapshot"
         folder.mkdir()
-        with storage.connect_api2(state_dir) as conn:
+        with storage.open_api2(state_dir) as conn:
             conn.execute("BEGIN")
             _export(conn, _asset_root(state_dir), folder)
         path = stage / "user.zip"

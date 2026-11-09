@@ -5,10 +5,10 @@ from __future__ import annotations
 from gp_control_plane.application.discovery import DiscoveryService
 from gp_control_plane.config import AppConfig
 from gp_control_plane.strategy_finder import close_stale_running_runs
-from gp_control_plane.http.cheroot_connection import require_pinned_cheroot
-from gp_control_plane.http.cheroot_connection import WebStreamLifecycle
-from gp_control_plane.http.core_app import CoreServices, create_core_app
-from gp_control_plane.http.http_runtime import WebHttpRuntime
+from tests.support.legacy_http.cheroot_connection import require_pinned_cheroot
+from tests.support.legacy_http.cheroot_connection import WebStreamLifecycle
+from tests.support.legacy_http.core_app import CoreServices, create_core_app
+from tests.support.legacy_http.http_runtime import WebHttpRuntime
 
 
 def create_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: bool = False) -> WebHttpRuntime:
@@ -19,7 +19,7 @@ def create_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: 
 
     # Import lazily to retain api_server's compatibility payload helpers while
     # removing it from the production request/listener path.
-    from gp_control_plane.http import api_server
+    from tests.support.legacy_http import api_server
 
     require_pinned_cheroot()
     api_server._recover_runtime_before_serve(config)

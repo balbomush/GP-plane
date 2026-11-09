@@ -14,8 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.error import URLError
-from urllib.request import urlopen
+from .downloads import get_bytes
 
 from .storage import read_custom_presets, save_custom_preset
 
@@ -43,7 +42,6 @@ _FALLBACK_V2FLY_CATEGORIES = [
 _EXPECTED_V2FLY_SOURCE_ERRORS = (
     OSError,
     TimeoutError,
-    URLError,
     subprocess.SubprocessError,
     tarfile.TarError,
     ValueError,
@@ -56,7 +54,6 @@ _EXPECTED_V2FLY_REVISION_FALLBACK_ERRORS = (
 _EXPECTED_V2FLY_ARCHIVE_FALLBACK_ERRORS = (
     OSError,
     TimeoutError,
-    URLError,
     tarfile.TarError,
 )
 
@@ -374,7 +371,7 @@ def _v2fly_error_kind(stage: str, exc: BaseException) -> str:
         return "cache"
     if isinstance(exc, (json.JSONDecodeError, ValueError, tarfile.TarError)):
         return "format"
-    if isinstance(exc, (OSError, TimeoutError, URLError, subprocess.SubprocessError)):
+    if isinstance(exc, (OSError, TimeoutError, subprocess.SubprocessError)):
         return "network"
     return "unexpected"
 
@@ -435,8 +432,7 @@ def fetch_v2fly_archive(revision: str | None = None) -> bytes:
         if not re.fullmatch(r"[0-9a-f]{40}", revision):
             raise ValueError("Invalid v2fly commit")
         url = V2FLY_ARCHIVE_URL.removesuffix("/refs/heads/master") + "/" + revision
-    with urlopen(url, timeout=60) as response:  # noqa: S310
-        return response.read()
+    return get_bytes(url, limit=64 * 1024 * 1024, timeout=60)
 
 
 def fetch_v2fly_revision() -> str:
@@ -454,8 +450,7 @@ def fetch_v2fly_revision() -> str:
             return revision
     except _EXPECTED_V2FLY_REVISION_FALLBACK_ERRORS:
         pass
-    with urlopen(V2FLY_REVISION_URL, timeout=15) as response:  # noqa: S310
-        return response.read().decode("utf-8", errors="replace")
+    return get_bytes(V2FLY_REVISION_URL, limit=1024 * 1024, timeout=15).decode("utf-8", errors="replace")
 
 
 def parse_v2fly_revision(text: str) -> str:
@@ -483,8 +478,7 @@ def fetch_v2fly_category_index() -> str:
         return fetch_v2fly_category_index_from_archive()
     except _EXPECTED_V2FLY_ARCHIVE_FALLBACK_ERRORS:
         pass
-    with urlopen(V2FLY_CONTENTS_URL, timeout=30) as response:  # noqa: S310
-        return response.read().decode("utf-8", errors="replace")
+    return get_bytes(V2FLY_CONTENTS_URL, limit=8 * 1024 * 1024, timeout=30).decode("utf-8", errors="replace")
 
 
 def fetch_v2fly_category_index_from_archive() -> str:
@@ -684,8 +678,7 @@ def collect_v2fly_domains(
 
 def fetch_v2fly_category(category: str) -> str:
     clean = _clean_category(category)
-    with urlopen(f"{V2FLY_BASE_URL}/{clean}", timeout=30) as response:  # noqa: S310
-        return response.read().decode("utf-8", errors="replace")
+    return get_bytes(f"{V2FLY_BASE_URL}/{clean}", limit=8 * 1024 * 1024, timeout=30).decode("utf-8", errors="replace")
 
 
 def parse_v2fly_domains(text: str) -> list[str]:

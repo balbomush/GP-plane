@@ -3,7 +3,7 @@
 from collections.abc import Callable, Iterable, Iterator
 import threading
 
-from ..application.web_view_contracts import INTERNAL_WEB_EVENTS_STREAM_PATH
+from gp_control_plane.application.web_view_contracts import INTERNAL_WEB_EVENTS_STREAM_PATH
 
 
 def stream_kind(method: str, path: str) -> str | None:

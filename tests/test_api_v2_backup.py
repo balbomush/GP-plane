@@ -3,7 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from hashlib import sha256
-from http.client import HTTPConnection
+from http.client import HTTPConnection, RemoteDisconnected
 from io import BytesIO
 import json
 from socket import SHUT_WR
@@ -189,13 +189,45 @@ class BackupTests(Api2HttpFixture, unittest.TestCase):
                 self.fail("restore did not claim the slot while waiting for bytes")
             status, _, body = self.call("POST", ROOT, b"", token)
             self.assertEqual((status, body["error"]["code"]), (409, "busy"))
+            # Uvicorn reports TCP EOF as disconnect. The contract requires
+            # cleanup and no restore on this incomplete HTTP message.
             connection.sock.shutdown(SHUT_WR)
-            with closing(connection.getresponse()) as response:
-                self.assertEqual(response.status, 400)
-                self.assertEqual(json.load(response)["error"]["code"], "invalid_request")
-        with storage.connect_api2(self.state) as conn:
+            with self.assertRaises(RemoteDisconnected):
+                connection.getresponse()
+        self._assert_upload_aborted(token)
+
+    def _assert_upload_aborted(self, token):
+        deadline = monotonic() + 5
+        while monotonic() < deadline:
+            status, _, payload = self.call("GET", "/api/v2/service/status", b"", token)
+            self.assertEqual(status, 200)
+            if not payload["busy"]:
+                break
+            self.assertEqual(payload["operation"], "backup_restore")
+            sleep(0.02)
+        else:
+            self.fail("interrupted upload did not release its slot")
+        with storage.open_api2(self.state) as conn:
             self.assertEqual(conn.execute("SELECT name FROM domains").fetchone()[0], "untouched.example")
         self.assertFalse(list(user_backup.saved_path(self.state).parent.glob(".user-restore-*")))
+
+    def test_restore_upload_inactivity_returns_408_and_cleans_stage(self):
+        token = self.call("POST", "/api/v2/access/authentication", {
+            "username": "admin", "password": "admin",
+        })[2]["bearer_token"]
+        with storage.connect_api2(self.state) as conn:
+            conn.execute("INSERT INTO domains(name) VALUES('untouched.example')")
+        with patch("gp_control_plane.http.api_v2.backup._UPLOAD_IDLE_TIMEOUT_SECONDS", 0.15):
+            with closing(HTTPConnection("127.0.0.1", self.port, timeout=5)) as connection:
+                connection.putrequest("POST", ROOT + "/restore-file")
+                connection.putheader("Authorization", "Bearer " + token)
+                connection.putheader("Content-Type", "application/octet-stream")
+                connection.putheader("Content-Length", "32")
+                connection.endheaders(b"broken")
+                with closing(connection.getresponse()) as response:
+                    self.assertEqual(response.status, 408)
+                    self.assertEqual(json.load(response)["error"]["code"], "request_timeout")
+        self._assert_upload_aborted(token)
 
     def test_legacy_saved_copy_is_never_downloaded_raw(self):
         token = self.call("POST", "/api/v2/access/authentication", {

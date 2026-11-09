@@ -1,19 +1,23 @@
 """Run acceptance, Stop selection, and GP checkpoint on the HTTP controller."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, closing
+from http.client import HTTPConnection
 import json
-from threading import Event
+from threading import Event, current_thread
 from uuid import uuid4
 from time import monotonic, sleep
 import unittest
 from unittest.mock import patch
 
+from pydantic import BaseModel, ConfigDict
+
 from gp_control_plane.application.api2_search import SearchController
 from gp_control_plane.application.operation_admission import OperationAdmission
 from gp_control_plane.http.api_v2.app import create_api2_app
 from gp_control_plane.http.api_v2.search_input import validate_start
-from gp_control_plane.http.http_runtime import WebHttpRuntime
-from gp_control_plane.storage import connect_api2
+from gp_control_plane.http.asgi import CoreHttpServer
+from gp_control_plane.storage import StorageUnavailableError, connect_api2, open_api2
 from tests.support.api2_http import Api2HttpFixture
 
 
@@ -21,6 +25,7 @@ class ControlledEngine:
     def __init__(self):
         self.executions = []
         self.saved = Event()
+        self.wait_for_stop_seconds = 5
 
     def prepare(self, code, parameters):
         return "fixture-v1"
@@ -31,11 +36,16 @@ class ControlledEngine:
             job.check("a" * 64, "tcp", "--filter-tcp=443", {}, {"test.example": True})
             job.log("first strategy")
             self.saved.set()
-            if not job.cancel.wait(5):
+            if not job.cancel.wait(self.wait_for_stop_seconds):
                 raise RuntimeError("stop not delivered")
             return "stopped"
         job.check("b" * 64, "tcp", "--filter-tcp=80", {}, {"test.example": True})
         return "completed"
+
+
+class FixtureStart(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    passes: int
 
 
 class Api2SearchRuntimeTests(Api2HttpFixture, unittest.TestCase):
@@ -49,7 +59,101 @@ class Api2SearchRuntimeTests(Api2HttpFixture, unittest.TestCase):
         admission = OperationAdmission()
         self.search = SearchController(self.state, admission, self.engine)
         app = create_api2_app(self.state, admission=admission, search=self.search)
-        return WebHttpRuntime(app, "127.0.0.1", self.port)
+        baseline = create_api2_app(self.state, search=self.search)
+        self.base_contract = baseline.openapi()
+
+        @app.post("/api/v2/engines/fixture/start")
+        def start_fixture(params: FixtureStart):
+            return self.search.start("fixture", {
+                "domain_list_id": None, "domains": ["test.example"], "parameters": params.model_dump(),
+            })
+
+        self.app = app
+        return CoreHttpServer(app, "127.0.0.1", self.port)
+
+    def test_an_isolated_adapter_extends_only_its_own_start(self):
+        actual = self.app.openapi()
+        for path in ("/engines/blockcheck2/start", "/engines/blockcheck2-gp/start", "/search/current", "/search/stop"):
+            self.assertEqual(actual["paths"][path], self.base_contract["paths"][path])
+        self.assertIn("/engines/fixture/start", actual["paths"])
+        self.assertIn("passes", actual["components"]["schemas"]["FixtureStart"]["properties"])
+        with open_api2(self.state) as conn:
+            conn.execute("INSERT INTO engines(id, code, name) VALUES(99,'fixture','Fixture')")
+        _, _, login = self.call("POST", "/api/v2/access/authentication", {"username": "admin", "password": "admin"})
+        token = login["bearer_token"]
+        with patch.dict("gp_control_plane.application.api2_search._KINDS", fixture="fixture-only"):
+            status, _, accepted = self.call("POST", "/api/v2/engines/fixture/start", {"passes": 4}, token)
+            self.assertEqual(status, 200)
+            self.assertTrue(self.engine.saved.wait(3))
+            self.assertEqual(self.search.active.parameters, {"passes": 4})
+            _, _, current = self.call("GET", "/api/v2/search/current", b"", token)
+            self.assertEqual(current["run"]["engine"]["code"], "fixture")
+            status, _, stopped = self.call("POST", "/api/v2/search/stop", b"", token)
+            self.assertEqual((status, stopped["run"]["id"], stopped["run"]["status"]),
+                             (200, accepted["id"], "stopped"))
+
+    def test_revoke_and_slow_sse_do_not_stop_active_search(self):
+        self.engine.wait_for_stop_seconds = 30
+        base = "/api/v2"
+        credentials = {"username": "admin", "password": "admin"}
+        token = self.call("POST", base + "/access/authentication", credentials)[2]["bearer_token"]
+        status, _, accepted = self.call("POST", base + "/engines/blockcheck2-gp/start",
+                                        {"domains": ["test.example"]}, token)
+        self.assertEqual(status, 200)
+        self.assertTrue(self.engine.saved.wait(3))
+
+        with ExitStack() as stack:
+            def stream(bearer):
+                conn = stack.enter_context(closing(HTTPConnection("127.0.0.1", self.port, timeout=5)))
+                conn.request("GET", base + "/search/events", headers={"Authorization": "Bearer " + bearer})
+                return stack.enter_context(closing(conn.getresponse()))
+
+            first, slow = stream(token), stream(token)
+            self.assertEqual((first.status, slow.status), (200, 200))
+            self.assertEqual(first.readline(), b"event: search\n")
+            self.assertIn(accepted["id"].encode(), first.readline())
+            denied = stream(token)
+            self.assertEqual(denied.status, 503)
+            self.assertEqual(json.load(denied)["error"]["code"], "stream_capacity_exhausted")
+            status, _, _ = self.call("PUT", base + "/access/change_password", {
+                "username": "admin", "old_password": "admin", "new_password": "changed",
+            }, token)
+            self.assertEqual(status, 204)
+            first.read()
+            slow.read()
+            token = self.call("POST", base + "/access/authentication",
+                              {**credentials, "password": "changed"})[2]["bearer_token"]
+            self.assertEqual(stream(token).status, 200)
+            _, _, current = self.call("GET", base + "/search/current", b"", token)
+            self.assertEqual((current["active"], current["run"]["id"]), (True, accepted["id"]))
+            status, _, stopped = self.call("POST", base + "/search/stop", b"", token)
+            self.assertEqual((status, stopped["run"]["status"]), (200, "stopped"))
+
+    def test_shutdown_cancels_engine_when_final_write_is_unavailable(self):
+        base = "/api/v2"
+        _, _, login = self.call("POST", base + "/access/authentication", {"username": "admin", "password": "admin"})
+        status, _, _ = self.call("POST", base + "/engines/blockcheck2-gp/start",
+                                 {"domains": ["test.example"]}, login["bearer_token"])
+        self.assertEqual(status, 200)
+        self.assertTrue(self.engine.saved.wait(3))
+        job = self.search.active
+
+        def fault(state):
+            if current_thread().name == "api2-search":
+                raise StorageUnavailableError("shutdown-secret-sentinel")
+            return open_api2(state)
+
+        with patch("gp_control_plane.application.api2_search.open_api2", side_effect=fault):
+            with self.assertLogs("gp_control_plane", level="DEBUG") as observed:
+                self.runtime.stop()
+                self.server_thread.join(5)
+                self.assertFalse(self.server_thread.is_alive())
+            self.assertTrue(job.cancel.is_set())
+            self.assertTrue(job.done.is_set())
+        self.assertTrue(any("error_code=finalize_failed" in line for line in observed.output))
+        self.assertTrue(any("error_code=cleanup_unverified" in line for line in observed.output))
+        self.assertTrue(any("traceback=" in line for line in observed.output))
+        self.assertFalse(any("shutdown-secret-sentinel" in line for line in observed.output))
 
     def test_stop_retains_committed_check_and_resume_passes_saved_position(self):
         prefix = "/api/v2"

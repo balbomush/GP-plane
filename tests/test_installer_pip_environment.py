@@ -26,7 +26,11 @@ class InstallerPipEnvironmentTests(unittest.TestCase):
         self.assertIn('PIP_CONFIG_FILE=/dev/null',helper)
         self.assertIn('PIP_CACHE_DIR=',helper);self.assertIn('TMPDIR=',helper)
         self.assertNotRegex(script,r'runuser[^\n]+"[^\n]+" -m pip (?:install|wheel|download|check)')
-        self.assertEqual(8,len(re.findall(r'^pip_user ',script,re.M)))
+        self.assertEqual(9,len(re.findall(r'^pip_user ',script,re.M)))
+
+        self.assertRegex(script, r'(?m)^pip_user .+ install --only-binary=:all: --require-hashes -r ".+/build\.lock"')
+        self.assertIn('wheel --no-build-isolation --no-deps', script)
+        self.assertIn('apt-get install -y --no-install-recommends', script)
 
     @unittest.skipUnless(sys.platform=='linux','real Linux Bash/pip destination test')
     def test_real_pip_redirect_config_and_environment_cannot_write_outside_venv(self):

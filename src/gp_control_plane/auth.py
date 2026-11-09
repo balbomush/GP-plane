@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -20,6 +21,7 @@ DEFAULT_PASSWORD = "admin"
 PASSWORD_MIN_LENGTH = 8
 TOKEN_TTL_SECONDS = 24 * 60 * 60
 PBKDF2_ITERATIONS = 240_000
+_PASSWORD_PREFIX = f"pbkdf2-sha256${PBKDF2_ITERATIONS}$"
 
 
 class AuthenticationError(ValueError):
@@ -219,8 +221,22 @@ def _password_hash(password: str, salt: str) -> str:
 
 def _password_matches(settings: dict[str, Any], password: str) -> bool:
     expected = str(settings.get("password_hash") or "")
+    if expected.startswith(_PASSWORD_PREFIX):
+        expected = expected.removeprefix(_PASSWORD_PREFIX)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        return False
     actual = _password_hash(password, str(settings.get("password_salt") or ""))
     return hmac.compare_digest(actual, expected)
+
+
+def encoded_password_hash(password: str, salt: str) -> str:
+    return _PASSWORD_PREFIX + _password_hash(password, salt)
+
+
+def initial_core_settings() -> dict[str, Any]:
+    settings = _initial_settings()
+    settings["password_hash"] = _PASSWORD_PREFIX + settings["password_hash"]
+    return settings
 
 
 def _issue_token(settings: dict[str, Any], ttl_seconds: int) -> tuple[str, int]:

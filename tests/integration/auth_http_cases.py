@@ -290,10 +290,10 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 return {"status": "stopped"}
 
             with mock.patch(
-                "gp_control_plane.web.api_server._job_zapret_multi_domain_discovery",
+                "tests.support.legacy_http.api_server._job_zapret_multi_domain_discovery",
                 side_effect=controlled_discovery,
             ), mock.patch(
-                "gp_control_plane.web.api_server.cleanup_nft_blockcheck_tables",
+                "tests.support.legacy_http.api_server.cleanup_nft_blockcheck_tables",
                 side_effect=cancel_hook_called.set,
             ):
                 core = _start_managed_server(serve, config, ui_enabled=False)
@@ -444,7 +444,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                     raise TimeoutError("test did not release the candidate writer")
 
             with mock.patch(
-                "gp_control_plane.web.api_server._job_zapret_multi_domain_discovery",
+                "tests.support.legacy_http.api_server._job_zapret_multi_domain_discovery",
                 side_effect=controlled_discovery,
             ), mock.patch(
                 "gp_control_plane.strategy_finder.upsert_candidate_event_conn",
@@ -453,7 +453,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 "gp_control_plane.strategy_finder.LIVE_CANDIDATE_FLUSH_SIZE",
                 1,
             ), mock.patch(
-                "gp_control_plane.web.api_server.create_post_run_snapshot",
+                "tests.support.legacy_http.api_server.create_post_run_snapshot",
                 return_value={"kind": "snapshot", "status": "success", "snapshot_id": "test-snapshot", "completed_at": "test-stopped"},
             ):
                 core = _start_managed_server(serve, config, ui_enabled=False)
@@ -578,7 +578,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
 
     def test_sse_terminal_eof_after_revocation_does_not_require_a_fast_heartbeat(self) -> None:
         """A4-RV-01: terminal EOF follows auth recheck, not a shortened heartbeat."""
-        from gp_control_plane.web import api_server
+        from tests.support.legacy_http import api_server
 
         self.assertEqual(api_server._SSE_HEARTBEAT_SECONDS, 15.0)
         for topology in ("core", "proxy"):
@@ -627,7 +627,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                     # SSE-LIFETIME-FIX replaced non-interruptible sleep with a
                     # listener-owned terminal Event. Instrument only that Core
                     # module's Event factory, never global time/threading APIs.
-                    from gp_control_plane.http import core_app
+                    from tests.support.legacy_http import core_app
                     controlled_threading=mock.Mock(wraps=threading)
                     controlled_threading.Event.side_effect=ControlledTerminal
                     with mock.patch.object(core_app,"threading",controlled_threading):
@@ -719,8 +719,8 @@ class BearerAuthHttpTests(OwnedHttpCase):
                     error.sqlite_errorcode = 517
                     error.sqlite_errorname = "SQLITE_BUSY_SNAPSHOT"
                     with mock.patch(
-                        "gp_control_plane.web.api_server.require_bearer_token", side_effect=error
-                    ), self.assertLogs("gp_control_plane.web.api_server", level="WARNING") as logged:
+                        "tests.support.legacy_http.api_server.require_bearer_token", side_effect=error
+                    ), self.assertLogs("tests.support.legacy_http.api_server", level="WARNING") as logged:
                         status, _response_headers, response_body = _request(port, "/api/core/status?secret=query", headers=headers)
                     self.assertEqual(status, 503, response_body)
                     self.assertEqual(json.loads(response_body), expected)
@@ -755,7 +755,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 self.assertEqual(status, 200, body)
                 headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
                 with mock.patch(
-                    "gp_control_plane.web.api_server.require_bearer_token",
+                    "tests.support.legacy_http.api_server.require_bearer_token",
                     side_effect=PermissionError("owned state path is temporarily inaccessible"),
                 ):
                     for port in (core.port, proxy.port):
@@ -814,7 +814,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
                 try:
                     with mock.patch(
-                        "gp_control_plane.web.api_server.require_bearer_token",
+                        "tests.support.legacy_http.api_server.require_bearer_token",
                         side_effect=error,
                     ):
                         status, _headers, body = _request(proxy.port, "/api/core/runs/history")
@@ -969,10 +969,10 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
                 with mock.patch(
-                    "gp_control_plane.web.api_server._event_payloads",
+                    "tests.support.legacy_http.api_server._event_payloads",
                     side_effect=[{"status": {"state": "ready"}}, _chained_storage_unavailable_517()],
-                ), mock.patch("gp_control_plane.web.api_server.time.sleep", return_value=None), self.assertLogs(
-                    "gp_control_plane.web.api_server", level="WARNING"
+                ), mock.patch("tests.support.legacy_http.api_server.time.sleep", return_value=None), self.assertLogs(
+                    "tests.support.legacy_http.api_server", level="WARNING"
                 ) as logged:
                     connection, response = _open_sse(proxy.port, headers)
                     stream = response.read()

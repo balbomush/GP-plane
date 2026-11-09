@@ -5,18 +5,19 @@ from pathlib import Path
 import re
 import tarfile
 from threading import Lock
-from urllib.error import HTTPError
 
-from bottle import Bottle
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 
-from ... import domain_sources
+from ... import core_supply, domain_sources
 from ...application.operation_admission import OperationAdmission
 from .access import authorized
-from .protocol import ApiError, json_response, no_body
+from .openapi import describe
+from .protocol import ApiError, no_body
 from .query import Query
 
 
-_ROOT = "/api/v2/data/sources/<source>"
+_ROOT = "/api/v2/data/sources/{source}"
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -37,20 +38,18 @@ def _remote_revision():
 
 
 def _upstream_error(error):
-    if isinstance(error, HTTPError) and (
-        error.code == 429 or error.code == 403 and error.headers is not None and error.headers.get("X-RateLimit-Remaining") == "0"
-    ):
+    if core_supply.is_rate_limit(error):
         return ApiError(503, "upstream_rate_limited", "Внешний источник ограничил запросы")
     return ApiError(502, "upstream_error", "Не удалось получить данные внешнего источника")
 
 
 def _page(items, offset, limit):
-    return json_response({
+    return {
         "items": items[offset:offset + limit], "total": len(items), "offset": offset, "limit": limit,
-    })
+    }
 
 
-def register_sources(app: Bottle, state_dir: Path, *, admission: OperationAdmission | None = None) -> None:
+def register_sources(app: FastAPI, state_dir: Path, *, admission: OperationAdmission | None = None) -> None:
     if admission is None:
         admission = OperationAdmission()
     authorize = authorized(state_dir)
@@ -79,27 +78,27 @@ def register_sources(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
             raise ApiError(404, "source_not_ready", "Локальная копия источника не готова")
         return manifest
 
-    @app.get(_ROOT)
+    @app.get(_ROOT, **describe("getSource"))
     @authorize
-    def get_source(source):
-        Query(set()).check()
+    def get_source(request: Request, source: str):
+        Query(request, set()).check()
         with source_lock:
-            return json_response(status(source))
+            return status(source)
 
-    @app.get(_ROOT + "/categories")
+    @app.get(_ROOT + "/categories", **describe("listCategories"))
     @authorize
-    def categories(source):
-        query = Query({"offset", "limit"})
+    def categories(request: Request, source: str):
+        query = Query(request, {"offset", "limit"})
         offset, limit = query.page()
         query.check()
         with source_lock:
             manifest = require_ready(source)
             return _page([{"id": name, "name": name} for name in manifest["categories"]], offset, limit)
 
-    @app.get(_ROOT + "/categories/<category>/domains")
+    @app.get(_ROOT + "/categories/{category}/domains", **describe("listCategoryDomains"))
     @authorize
-    def domains(source, category):
-        query = Query({"offset", "limit"})
+    def domains(request: Request, source: str, category: str):
+        query = Query(request, {"offset", "limit"})
         offset, limit = query.page()
         query.check()
         with source_lock:
@@ -112,10 +111,10 @@ def register_sources(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
                 raise ApiError(404, "source_not_ready", "Локальная копия источника не готова") from error
         return _page(domain_sources.parse_v2fly_domains(raw), offset, limit)
 
-    @app.get(_ROOT + "/update")
+    @app.get(_ROOT + "/update", **describe("checkSourceUpdate"))
     @authorize
-    def check_update(source):
-        Query(set()).check()
+    def check_update(request: Request, source: str):
+        Query(request, set()).check()
         with source_lock:
             installed = status(source)
         try:
@@ -124,17 +123,17 @@ def register_sources(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
                 raise ValueError("Unknown installed source revision")
         except (OSError, ValueError) as error:
             raise _upstream_error(error) from error
-        return json_response({
+        return {
             "source": source,
             "installed_revision": installed["installed_revision"],
             "available_revision": revision,
             "update_available": installed["installed_revision"] != revision,
-        })
+        }
 
-    @app.post(_ROOT + "/update")
+    @app.post(_ROOT + "/update", **describe("updateSource"))
     @authorize
-    def update(source):
-        no_body()
+    def update(request: Request, source: str):
+        no_body(request)
         if source != "v2fly":
             raise ApiError(404, "not_found", "Источник не найден")
         with admission.claim("source_update"):
@@ -145,6 +144,6 @@ def register_sources(app: Bottle, state_dir: Path, *, admission: OperationAdmiss
                     domain_sources.prepare_v2fly_local_storage(
                         state_dir, archive_fetcher=lambda: payload, revision_fetcher=lambda: revision,
                     )
-                    return json_response(status(source))
+                    return status(source)
             except (OSError, ValueError, tarfile.TarError) as error:
                 raise _upstream_error(error) from error

@@ -5,11 +5,33 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from gp_control_plane import storage
 
 
 class StrategyPersistenceTests(unittest.TestCase):
+    def test_only_initialization_checks_the_layout_and_close_secures_real_database(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / "primary"
+            other = Path(temp) / "second"
+            with storage.connect_api2(state):
+                pass
+            path = storage.db_path(state)
+            with patch("gp_control_plane.migrations.api2._validate_layout", side_effect=ValueError("layout probe")):
+                with self.assertRaisesRegex(ValueError, "layout probe"):
+                    storage.connect_api2(state)
+                with patch("gp_control_plane.storage._secure_sqlite_files") as secure:
+                    with storage.open_api2(state) as conn:
+                        self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+                        self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 2)
+                        self.assertEqual(conn.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+                    self.assertEqual([c.args for c in secure.call_args_list],
+                                     [(path,), (path,)])
+            with self.assertRaises(sqlite3.OperationalError):
+                storage.open_api2(other)
+            self.assertFalse(other.exists())
+
     def test_complete_strategy_and_checkpoint_commit_together(self):
         save = getattr(storage, "save_strategy_check", None)
         self.assertIsNotNone(save, "strategy result writer is missing")

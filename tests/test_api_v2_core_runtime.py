@@ -4,6 +4,7 @@ from contextlib import ExitStack, closing
 from http.client import HTTPConnection
 from pathlib import Path
 import json
+import socket
 import sqlite3
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
@@ -55,6 +56,35 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/auth/login", {})[0], 404)
         status, _, health = self.call("GET", "/api/health", b"")
         self.assertEqual((status, health), (200, {"status": "ok"}))
+
+    def test_ambiguous_request_framing_cannot_dispatch_a_pipelined_request(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as client:
+            client.sendall(
+                b"POST /api/v2/access/authentication HTTP/1.1\r\nHost: localhost\r\n"
+                b"Content-Type: application/json\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n"
+                b"\r\n0\r\n\r\nGET /api/health HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            )
+            parts = []
+            while data := client.recv(65536):
+                parts.append(data)
+        response = b"".join(parts)
+        self.assertTrue(response.startswith(b"HTTP/1.1 400"))
+        self.assertEqual(response.count(b"HTTP/1.1 "), 1)
+        self.assertIn(b"connection: close", response.lower())
+        self.assertIn(b'"code":"invalid_request"', response)
+
+    def test_sse_storage_error_before_headers_matches_regular_api(self):
+        from gp_control_plane.storage import StorageUnavailableError
+
+        token = self.call("POST", "/api/v2/access/authentication", {
+            "username": "admin", "password": "migration-fixture-only",
+        })[2]["bearer_token"]
+        with patch("gp_control_plane.application.access.require_access",
+                   side_effect=StorageUnavailableError("synthetic-private-sentinel")):
+            for route in ("current", "events"):
+                status, _, payload = self.call("GET", f"/api/v2/search/{route}", b"", token)
+                self.assertEqual((status, payload["error"]["code"]), (503, "storage_unavailable"))
+                self.assertNotIn("synthetic-private-sentinel", json.dumps(payload))
 
     def test_restart_requires_proof_for_a_quarantined_process_even_if_nft_is_gone(self):
         with TemporaryDirectory() as root:

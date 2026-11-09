@@ -1,26 +1,25 @@
-"""Explicit startup owner for the Bottle/Cheroot Core listener."""
+"""Explicit startup owner for the ASGI Core listener."""
+
+from threading import Event
 
 from ..application.api2_search import SearchController
 from ..application.core_update import CoreUpdate
 from ..application.operation_admission import OperationAdmission
+from ..application.runtime_recovery import _clear_stale_current_run, _recover_runtime_before_serve
 from ..config import AppConfig
 from ..engines.api2_blockcheck import BlockcheckEngine
 from ..state import read_state, update_state
 from ..storage import connect_api2
 from ..zapret2 import cleanup_owned_nft_table, recover_quarantined_process_run, recover_registered_process_runs
 from .api_v2.app import create_api2_app
-from .cheroot_connection import WebStreamLifecycle, require_pinned_cheroot
-from .http_runtime import WebHttpRuntime
+from .asgi import CoreHttpServer
 
 
-def create_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: bool = False) -> WebHttpRuntime:
+def create_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: bool = False) -> CoreHttpServer:
     """Recover owned processes and migrate before accepting any request."""
     if ui_enabled:
         raise ValueError("Core no longer embeds Web; install GP Plane Web separately")
 
-    from .api_server import _clear_stale_current_run, _recover_runtime_before_serve
-
-    require_pinned_cheroot()
     state_dir = config.output.state_dir
     current = read_state(state_dir)
     table = current.get("current_run_nft_table")
@@ -41,12 +40,12 @@ def create_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: 
                       error_json='{"code":"interrupted","message":"Core restarted during search"}'
                WHERE status IN ('starting','running','stopping')"""
         )
-    lifecycle = WebStreamLifecycle()
+    shutdown = Event()
     admission = OperationAdmission()
     search = SearchController(state_dir, admission, BlockcheckEngine())
     updater = CoreUpdate(state_dir, admission)
-    app = create_api2_app(state_dir, admission=admission, search=search, updater=updater, stream_lifecycle=lifecycle)
-    return WebHttpRuntime(app, host, port, stream_lifecycle=lifecycle)
+    app = create_api2_app(state_dir, admission=admission, search=search, updater=updater, shutdown=shutdown)
+    return CoreHttpServer(app, host, port, shutdown=shutdown)
 
 
 def serve_core_runtime(config: AppConfig, host: str, port: int, *, ui_enabled: bool = False) -> None:

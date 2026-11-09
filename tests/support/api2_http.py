@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 import threading
 import time
 
-from bottle import Bottle
-from gp_control_plane.http.http_runtime import WebHttpRuntime
+from fastapi import FastAPI
+from gp_control_plane.http.asgi import CoreHttpServer
 
 
 class Api2HttpFixture:
@@ -17,13 +17,13 @@ class Api2HttpFixture:
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.state = Path(temp.name) / "state"
-        app = Bottle()
+        app = FastAPI()
         self.configure(app)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             self.port = sock.getsockname()[1]
-        runtime = self.create_runtime(app)
-        thread = threading.Thread(target=runtime.serve_forever, daemon=True)
+        runtime = self.runtime = self.create_runtime(app)
+        thread = self.server_thread = threading.Thread(target=runtime.serve_forever, daemon=True)
         thread.start()
 
         def cleanup():
@@ -43,7 +43,7 @@ class Api2HttpFixture:
                 time.sleep(0.01)
 
     def create_runtime(self, app):
-        return WebHttpRuntime(app, "127.0.0.1", self.port)
+        return CoreHttpServer(app, "127.0.0.1", self.port)
 
     def call(self, method, path, value, token=None, media_type="application/json"):
         headers = {"Content-Type": media_type}

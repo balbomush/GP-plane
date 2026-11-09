@@ -8,15 +8,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import __version__, core_api, service_api
-from ..application.discovery import (
+from gp_control_plane import __version__, core_api, service_api
+from gp_control_plane.application.discovery import (
     MULTI_DOMAIN_DISCOVERY_JOB,
     STANDARD_DISCOVERY_JOB,
     DiscoveryService,
     DiscoverySpec,
 )
-from ..application import web_views
-from ..application.web_view_contracts import (
+from gp_control_plane.application import web_views
+from gp_control_plane.application.web_view_contracts import (
     INTERNAL_AUTH_VERIFY_BEARER_PATH,
     INTERNAL_WEB_EVENTS_SNAPSHOT_PATH,
     INTERNAL_WEB_EVENTS_STREAM_PATH,
@@ -24,8 +24,8 @@ from ..application.web_view_contracts import (
     INTERNAL_WEB_VIEW_POST_PATHS,
     external_web_view_path,
 )
-from ..auth import AuthenticationError, PasswordValidationError, change_password, health_payload, login, require_bearer_token
-from ..backups import (
+from gp_control_plane.auth import AuthenticationError, PasswordValidationError, change_password, health_payload, login, require_bearer_token
+from gp_control_plane.backups import (
     create_post_run_snapshot,
     create_snapshot_if_idle,
     delete_snapshot_if_idle,
@@ -33,8 +33,8 @@ from ..backups import (
     restore_snapshot_if_idle,
     snapshot_file_path,
 )
-from ..config import AppConfig
-from ..domain_sources import (
+from gp_control_plane.config import AppConfig
+from gp_control_plane.domain_sources import (
     builtin_preset_sources,
     fetch_v2fly_category_local,
     fetch_v2fly_revision,
@@ -48,15 +48,15 @@ from ..domain_sources import (
     read_v2fly_group_manifest,
     write_v2fly_catalog_cache,
 )
-from ..engines.blockcheck2 import Blockcheck2Adapter
-from ..jobs import JobRunner
-from ..releases import release_channel_info
-from ..resource_budget import (
+from gp_control_plane.engines.blockcheck2 import Blockcheck2Adapter
+from gp_control_plane.jobs import JobRunner
+from gp_control_plane.releases import release_channel_info
+from gp_control_plane.resource_budget import (
     BACKUP_STREAM_CHUNK_BYTES,
     BACKUP_UPLOAD_MAX_BYTES,
     JSON_REQUEST_MAX_BYTES,
 )
-from ..settings import (
+from gp_control_plane.settings import (
     DEFAULT_SETTINGS,
     read_run_settings,
     read_service_settings,
@@ -64,8 +64,8 @@ from ..settings import (
     save_run_settings,
     save_settings,
 )
-from ..state import active_job_lock_payload, has_active_runtime, now_iso, read_state, update_state
-from ..storage import (
+from gp_control_plane.state import active_job_lock_payload, has_active_runtime, now_iso, read_state, update_state
+from gp_control_plane.storage import (
     delete_custom_preset,
     delete_user_presets,
     read_custom_preset_index,
@@ -80,7 +80,7 @@ from ..storage import (
     is_storage_unavailable_error as _is_storage_unavailable_error,
     storage_unavailable_diagnostic,
 )
-from ..strategy_finder import (
+from gp_control_plane.strategy_finder import (
     candidate_storage_version,
     close_stale_running_runs,
     domain_sets,
@@ -91,7 +91,7 @@ from ..strategy_finder import (
     run_multi_domain_discovery,
     run_standard_discovery,
 )
-from ..zapret2 import (
+from gp_control_plane.zapret2 import (
     check_install_cached,
     cleanup_nft_blockcheck_tables,
     recover_quarantined_process_run,
@@ -189,7 +189,7 @@ def _clean_install_vault_restore_response(payload: dict[str, Any], vault_id: str
 
 def serve(config: AppConfig, host: str, port: int, *, ui_enabled: bool = False) -> None:
     """Compatibility startup facade for the shared Bottle/Cheroot runtime."""
-    from .core_runtime import serve_core_runtime
+    from gp_control_plane.http.core_runtime import serve_core_runtime
 
     return serve_core_runtime(config, host, port, ui_enabled=ui_enabled)
 
@@ -203,7 +203,7 @@ def serve_core(config: AppConfig, host: str, port: int) -> None:
 def serve_web_proxy(config: AppConfig, host: str, port: int, *, core_url: str) -> None:
     """Lazy compatibility facade that keeps Web out of the Core import graph."""
 
-    from .proxy import serve_web_proxy as _serve_web_proxy
+    from gp_control_plane.http.proxy import serve_web_proxy as _serve_web_proxy
 
     return _serve_web_proxy(config, host, port, core_url=core_url)
 

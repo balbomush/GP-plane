@@ -6,7 +6,7 @@ from typing import Any
 from unittest import mock
 from gp_control_plane.config import AppConfig,OutputConfig
 from gp_control_plane.state import read_state
-from gp_control_plane.http import api_server as web_app,routes as web_routes
+from tests.support.legacy_http import api_server as web_app, routes as web_routes
 from gp_control_plane.http.core_server import serve_core
 from tests import test_core_application_http as original
 from tests.test_core_application_http import _http_request,_authenticated_headers,_bearer_authorization_for_state,_reserved_unavailable_loopback_port,_json_object_without_duplicate_keys,_JobRunnerThreadTracker,_openapi_test_request,_assert_openapi_response_contract,_http_sse_first_event

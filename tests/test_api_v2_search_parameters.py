@@ -38,3 +38,10 @@ class SearchParameterTests(unittest.TestCase):
             ("body:/parameters/repeats", "invalid_type"), ("body:/parameters/enable_http", "invalid_type"),
             ("body:/parameters/curl_max_time", "invalid_value"),
         })
+
+
+    def test_invalid_unicode_domain_is_reported_once(self):
+        value, errors = api_v2.validate_start("blockcheck2", {"domains": ["\\ud800"]})
+        self.assertIsNone(value)
+        self.assertEqual([(item["field"], item["code"]) for item in errors],
+                         [("body:/domains/0", "invalid_value")])

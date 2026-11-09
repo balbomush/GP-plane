@@ -188,7 +188,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 with mock.patch(
                     "gp_control_plane.core_api.iter_strategy_candidates_export_lines",
                     side_effect=unavailable_after_first_line,
-                ), self.assertLogs("gp_control_plane.web.api_server", level="WARNING") as logged:
+                ), self.assertLogs("tests.support.legacy_http.api_server", level="WARNING") as logged:
                     status, response_headers, body = _request(
                         core.port, "/api/core/strategy-candidates/export", headers=headers
                     )
@@ -225,10 +225,10 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
                 with mock.patch(
-                    "gp_control_plane.web.api_server._event_payloads",
+                    "tests.support.legacy_http.api_server._event_payloads",
                     side_effect=[{"status": {"state": "ready"}}, _chained_storage_unavailable_517()],
-                ), mock.patch("gp_control_plane.web.api_server.time.sleep", return_value=None), self.assertLogs(
-                    "gp_control_plane.web.api_server", level="WARNING"
+                ), mock.patch("tests.support.legacy_http.api_server.time.sleep", return_value=None), self.assertLogs(
+                    "tests.support.legacy_http.api_server", level="WARNING"
                 ) as logged:
                     connection, response = _open_sse(core.port, headers, path="/api/internal/web-events/stream")
                     stream = response.read()
@@ -264,7 +264,7 @@ class BearerAuthHttpTests(OwnedHttpCase):
                 core = _start_managed_server(serve, config, ui_enabled=False)
                 try:
                     with mock.patch(
-                        "gp_control_plane.web.api_server.require_bearer_token",
+                        "tests.support.legacy_http.api_server.require_bearer_token",
                         side_effect=error,
                     ):
                         status, _headers, body = _request(core.port, "/api/core/runs/history")

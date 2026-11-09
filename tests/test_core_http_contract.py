@@ -3,7 +3,7 @@ import ast,json,tempfile,unittest
 from pathlib import Path
 from unittest import mock
 from gp_control_plane.config import AppConfig,OutputConfig
-from gp_control_plane.http import api_server as web_app,docs as web_docs,routes as web_routes
+from tests.support.legacy_http import api_server as web_app, docs as web_docs, routes as web_routes
 from gp_control_plane.strategy_finder import upsert_candidates
 class CoreHttpContractTests(unittest.TestCase):
     def test_openapi_contract_matches_routes_auth_errors_and_identifiers(self) -> None:
@@ -118,11 +118,11 @@ class CoreHttpContractTests(unittest.TestCase):
             self.assertNotIn("from .app import", source)
             self.assertNotIn("gp_control_plane.web.app", source)
 
-    def test_core_server_uses_api_server_entrypoint(self) -> None:
-            from gp_control_plane.web import api_server, core_server
+    def test_core_server_uses_asgi_entrypoint(self) -> None:
+            from gp_control_plane.http import core_runtime, core_server
 
             config = AppConfig(output=OutputConfig(state_dir=Path("unused-state")))
-            with mock.patch.object(api_server, "serve") as serve_mock:
+            with mock.patch.object(core_runtime, "serve_core_runtime") as serve_mock:
                 core_server.serve_core(config, host="127.0.0.1", port=18081)
 
             serve_mock.assert_called_once_with(config, host="127.0.0.1", port=18081, ui_enabled=False)

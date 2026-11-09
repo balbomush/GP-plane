@@ -13,6 +13,7 @@ from .repositories.presets import _empty_preset_domains_page
 from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import contextmanager
+from functools import partial
 import json
 import os
 import sqlite3
@@ -115,9 +116,9 @@ def _raise_storage_unavailable(error: sqlite3.OperationalError) -> None:
 
 
 class ClosingConnection(sqlite3.Connection):
-    def __init__(self, database: str | Path, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, database: str | Path, *args: Any, secure_path: Path | None = None, **kwargs: Any) -> None:
         super().__init__(database, *args, **kwargs)
-        self._database_path = Path(database)
+        self._database_path = secure_path if secure_path is not None else Path(database)
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
         try:
@@ -201,24 +202,47 @@ def db_path(state_dir: Path) -> Path:
 
 
 def connect_api2(state_dir: Path, *, busy_timeout_ms: int = 30_000) -> sqlite3.Connection:
-    """Open API 2 storage. The legacy runtime must be quiescent before cutover."""
+    """Open and validate storage at startup, migration, or restore."""
     from .migrations import api2
 
     path = db_path(state_dir)
-    conn = sqlite3.connect(path, timeout=max(0, busy_timeout_ms) / 1000, factory=ClosingConnection)
-    conn.row_factory = sqlite3.Row
+    conn = _api2_connection(path, busy_timeout_ms, mode="rwc")
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        conn.execute("PRAGMA foreign_keys=ON")
         api2.initialize(conn, SCHEMA_MIGRATIONS, legacy_idle=lambda: not _state_has_active_job(state_dir))
-        _secure_sqlite_files(path)
         return conn
     except BaseException as error:
         conn.close()
         if isinstance(error, sqlite3.OperationalError):
             _raise_storage_unavailable(error)
         raise
+
+
+def open_api2(state_dir: Path, *, busy_timeout_ms: int = 30_000) -> sqlite3.Connection:
+    """Open the already initialized store without rescanning its layout."""
+    path = state_dir / "strategy-finder" / "state.sqlite3"
+    return _api2_connection(path, busy_timeout_ms)
+
+
+def _api2_connection(path: Path, busy_timeout_ms: int, *, mode: str = "rw") -> sqlite3.Connection:
+    conn = None
+    try:
+        conn = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode={mode}", uri=True,
+            timeout=max(0, busy_timeout_ms) / 1000, factory=partial(ClosingConnection, secure_path=path),
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _secure_sqlite_files(path)
+        return conn
+    except BaseException as error:
+        if conn is not None:
+            conn.close()
+        if isinstance(error, sqlite3.OperationalError):
+            _raise_storage_unavailable(error)
+        raise
+
 
 def save_strategy_check(
     state_dir: Path,
@@ -234,7 +258,7 @@ def save_strategy_check(
     """Persist the complete check using one FULL SQLite write transaction."""
     from .repositories import strategy_results
 
-    with connect_api2(state_dir) as conn:
+    with open_api2(state_dir) as conn:
         conn.execute("BEGIN IMMEDIATE")
         return strategy_results.save_check(
             conn, state_dir / "strategy-finder" / "assets", run_id=run_id, protocol=protocol,

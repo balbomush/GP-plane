@@ -5,10 +5,10 @@ from unittest import mock
 from wsgiref.util import setup_testing_defaults
 from gp_control_plane.auth import AuthenticationError
 from gp_control_plane.config import AppConfig,OutputConfig
-from gp_control_plane.http import core_app,docs
-from gp_control_plane.http.cheroot_connection import WebStreamLifecycle
-from gp_control_plane.http.legacy_http import unsupported_method
-from gp_control_plane.http.stream_admission import ClosingIterator,StreamAdmission,stream_kind
+from tests.support.legacy_http import core_app, docs
+from tests.support.legacy_http.cheroot_connection import WebStreamLifecycle
+from tests.support.legacy_http.legacy_http import unsupported_method
+from tests.support.legacy_http.stream_admission import ClosingIterator,StreamAdmission,stream_kind
 
 class CoreProductCorrectionTests(unittest.TestCase):
     def test_headless_public_sse_stays_404_after_auth_when_internal_slots_full(self):
