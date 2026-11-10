@@ -260,8 +260,11 @@ def _check_json(text, expected_type, field):
 def _validate_row(table, row):
     # These IDs are exposed as positive integers by API 2. Milestones
     # explicitly allow zero; run/strategy identities are strings instead.
-    if table in ("engines", "domain_presets", "bundles") and row["id"] < 1:
+    if table in ("engines", "domain_presets", "bundles", "strategy_domain_results",
+                 "bundle_domain_results") and row["id"] < 1:
         raise ValueError("Invalid public ID")
+    if table in ("strategies", "runs") and (not isinstance(row["id"], str) or not row["id"]):
+        raise ValueError("Invalid public string ID")
     if table == "domain_presets":
         _check_json(row["source_json"], dict, "source")
         if row["kind"] not in ("user", "system"):
@@ -277,8 +280,6 @@ def _validate_row(table, row):
             raise ValueError("Invalid bundle source")
     if table != "runs":
         return
-    if not isinstance(row["id"], str) or not row["id"]:
-        raise ValueError("Invalid run ID")
     for field in ("started_at", "finished_at"):
         value = row[field]
         if value is None:
