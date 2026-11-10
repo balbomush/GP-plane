@@ -261,8 +261,10 @@ def _validate_row(table, row):
     # These IDs are exposed as positive integers by API 2. Milestones
     # explicitly allow zero; run/strategy identities are strings instead.
     if table in ("engines", "domain_presets", "bundles", "strategy_domain_results",
-                 "bundle_domain_results") and row["id"] < 1:
+                 "bundle_domain_results") and (type(row["id"]) is not int or row["id"] < 1):
         raise ValueError("Invalid public ID")
+    if table == "milestones" and (type(row["id"]) is not int or row["id"] < 0):
+        raise ValueError("Invalid milestone ID")
     if table in ("strategies", "runs") and (not isinstance(row["id"], str) or not row["id"]):
         raise ValueError("Invalid public string ID")
     if table == "domain_presets":
@@ -330,6 +332,8 @@ def _load_rows(folder, conn):
                 row = json.loads(line)
                 if not isinstance(row, dict) or row.keys() != set(columns):
                     raise ValueError(f"Invalid backup row in {table}")
+                # Validate before SQLite can coerce values or allocate a NULL ID.
+                _validate_row(table, row)
                 conn.execute(f"INSERT INTO {table}({', '.join(columns)}) VALUES({placeholders})",
                              [row[name] for name in columns])
     if conn.execute("SELECT max(id) FROM milestones").fetchone()[0] in (None, 0):
@@ -380,13 +384,13 @@ def _loaded_user_tables(folder, stage, version):
             _load_rows(folder, source)
         elif version == "7":
             _legacy_rows(folder, stage, source)
+            for table in USER_TABLES:
+                for row in source.execute(f"SELECT * FROM {table}"):
+                    _validate_row(table, row)
         else:
             raise ValueError("Unsupported backup version")
-        # Validate the complete staging set, including supported legacy imports,
-        # before normalizing interrupted runs, persisting assets or replacing data.
-        for table in USER_TABLES:
-            for row in source.execute(f"SELECT * FROM {table}"):
-                _validate_row(table, row)
+        # Both formats are validated before normalizing interrupted runs,
+        # persisting assets or replacing data.
         message = json.dumps({
             "code": "interrupted", "message": "Restored unfinished search",
         }, separators=(",", ":"))

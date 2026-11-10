@@ -67,6 +67,8 @@ class BackupSemanticsTests(Api2HttpFixture, unittest.TestCase):
     def test_rejected_ids_and_times_preserve_data_access_settings_and_saved_backup(self):
         token, original = self.prepare_archive()
         cases = [('domain_presets', 'id', -1), ('domain_presets', 'id', 0),
+                 ('domain_presets', 'id', None), ('bundles', 'id', None),
+                 ('strategy_domain_results', 'id', None), ('bundle_domain_results', 'id', None),
                  ('engines', 'id', -1), ('bundles', 'id', -1), ('runs', 'id', ''),
                  ('strategy_domain_results', 'id', -1), ('strategy_domain_results', 'id', 0),
                  ('bundle_domain_results', 'id', -1), ('bundle_domain_results', 'id', 0),
