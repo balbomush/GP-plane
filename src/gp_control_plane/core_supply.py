@@ -149,8 +149,10 @@ def list_releases(tag):
     records = catalog()
     versions = {info["version"] for info, _ in records if info["tag"] == tag}
     from packaging.version import Version
-    return [{"version": version, "tag": tag} for version in sorted(versions, key=Version, reverse=True)
-            if _latest(records, version, tag) is not None]
+    # The public list identifies pairs, not downloadable files. An incomplete
+    # legacy version must not hide other versions; explicit preparation still
+    # validates the latest publication and never falls back to an older build.
+    return [{"version": version, "tag": tag} for version in sorted(versions, key=Version, reverse=True)]
 
 
 def _sums(raw: bytes) -> dict[str, str]:

@@ -18,6 +18,19 @@ def row(identifier=1, stage="alpha", published="2026-11-09T12:00:00Z", **changes
 
 
 class ReleaseSelectionTests(unittest.TestCase):
+    def test_incomplete_legacy_version_does_not_hide_other_versions_in_stage_list(self):
+        legacy = row(1, 'stable', tag_name='v0.4.4', assets=[], body='')
+        ready = row(2, 'stable')
+        with self.catalog([legacy, ready]):
+            self.assertEqual(core_supply.list_releases('stable'), [
+                {'version':'0.5.0','tag':'stable'}, {'version':'0.4.4','tag':'stable'}])
+            with self.assertRaises(ValueError):
+                core_supply.latest('0.4.4','stable')
+        with self.catalog([legacy, ready, row(3, 'stable', published='2026-11-10T12:00:00Z', assets=[])]):
+            self.assertEqual(len(core_supply.list_releases('stable')), 2)
+            with self.assertRaises(ValueError):
+                core_supply.latest('0.5.0','stable')
+
     def test_catalog_fetches_all_pages_before_stage_selection(self):
         pages = [json.dumps([{"draft": True}] * 100).encode(), json.dumps([row(2)]).encode()]
         with patch.object(releases, "get_bytes", side_effect=pages) as network:
