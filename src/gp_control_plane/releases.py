@@ -94,10 +94,19 @@ def release_channel_info(
 
 
 def fetch_github_releases() -> str:
-    return get_bytes(
-        RELEASES_API_URL, limit=8 * 1024 * 1024, timeout=20,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "gp-control-plane"},
-    ).decode("utf-8", errors="replace")
+    result = []
+    for page in range(1, 101):
+        raw = get_bytes(
+            f"{RELEASES_API_URL}?per_page=100&page={page}", limit=8 * 1024 * 1024, timeout=20,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "gp-control-plane"},
+        ).decode("utf-8")
+        rows = json.loads(raw)
+        if not isinstance(rows, list):
+            raise ValueError("Invalid GitHub release catalog")
+        result.extend(rows)
+        if len(rows) < 100:
+            return json.dumps(result)
+    raise ValueError("GitHub release catalog exceeds its limit")
 
 
 def fetch_git_tags() -> str:

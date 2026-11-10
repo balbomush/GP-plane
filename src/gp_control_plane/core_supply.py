@@ -2,7 +2,9 @@
 
 from base64 import urlsafe_b64encode
 from configparser import ConfigParser, Error as IniError
+from datetime import datetime, timezone
 import csv
+import json
 from email.parser import BytesParser
 from hashlib import file_digest, sha256
 import os
@@ -12,13 +14,14 @@ import tomllib
 from zipfile import BadZipFile, ZipFile
 import re
 from tempfile import TemporaryDirectory
+from threading import RLock
 from packaging.tags import Tag
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from .downloads import DownloadError
 
 from . import releases
-from .backups import _fsync_directory
+from .backups import _fsync_directory, _write_private_json_atomic
 
 
 _VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?"
@@ -27,6 +30,7 @@ _SOURCE = re.compile(r"core-[0-9a-f]{40}\.tar\.gz")
 _CHECKSUM = re.compile(r"([0-9a-f]{64}) [ *]([A-Za-z0-9_.-]+)")
 _MAX_ASSET = 64 * 1024 * 1024
 _MAX_SUMS = 64 * 1024
+_CACHE_PUBLICATION = RLock()
 
 
 def _wheel_version(filename: str) -> str | None:
@@ -72,11 +76,81 @@ def _release_info(row):
     }
 
 
+_STAGES = {"alpha", "prerelease", "stable"}
+_STAGE_MARKER = re.compile(r"<!--\s*gp-release-stage:\s*([a-z]+)\s*-->")
+
+
+def _pair(version, tag):
+    if not isinstance(version, str) or len(version) > 64 or not re.fullmatch(_VERSION, version) or tag not in _STAGES:
+        raise ValueError("Invalid Core version or stage")
+
+
+def _record(row):
+    git_tag = row.get("tag_name")
+    if not isinstance(git_tag, str) or not _TAG.fullmatch(git_tag):
+        return None
+    version = git_tag.removeprefix("v").split("-alpha.")[0]
+    body = row.get("body") or ""
+    marks = _STAGE_MARKER.findall(body)
+    prerelease = row.get("prerelease")
+    if type(prerelease) is not bool or len(marks) > 1 or ("gp-release-stage" in body and len(marks) != 1):
+        raise ValueError("Ambiguous Core release stage")
+    stage = marks[0] if marks else ("alpha" if git_tag == "v0.5.0" and prerelease else "prerelease" if prerelease else "stable")
+    if stage not in _STAGES or prerelease != (stage != "stable"):
+        raise ValueError("Core release stage contradicts GitHub metadata")
+    identifier, published = row.get("id"), row.get("published_at")
+    if type(identifier) is not int or identifier <= 0 or not isinstance(published, str):
+        raise ValueError("Missing Core release publication identity")
+    try:
+        timestamp = datetime.fromisoformat(published.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("Missing publication timezone")
+    except ValueError as error:
+        raise ValueError("Invalid Core release publication time") from error
+    complete = _release_info(row)
+    if complete is not None and complete[0]["version"] != version:
+        raise ValueError("Core release package version contradicts its reference")
+    info = {"version": version, "tag": stage, "git_tag": git_tag, "release_id": identifier,
+            "published_at": timestamp.astimezone(timezone.utc).isoformat()}
+    return info, complete[1] if complete is not None else None
+
+
 def catalog():
-    return [
-        info for row in releases.parse_github_releases(releases.fetch_github_releases())
-        if (info := _release_info(row)) is not None
-    ]
+    records = []
+    seen = set()
+    for row in releases.parse_github_releases(releases.fetch_github_releases()):
+        record = _record(row)
+        if record is not None:
+            if record[0]["release_id"] in seen:
+                raise ValueError("Duplicate Core release identity")
+            seen.add(record[0]["release_id"])
+            records.append(record)
+    return records
+
+
+def _latest(records, version, tag):
+    matches = [(info, files) for info, files in records if info["version"] == version and info["tag"] == tag]
+    if not matches:
+        return None
+    selected = max(matches, key=lambda record: (record[0]["published_at"], record[0]["release_id"]))
+    if selected[1] is None:
+        raise ValueError("Latest Core release supply is incomplete")
+    return selected
+
+
+def latest(version, tag):
+    _pair(version, tag)
+    return _latest(catalog(), version, tag)
+
+
+def list_releases(tag):
+    if tag not in _STAGES:
+        raise ValueError("Invalid Core stage")
+    records = catalog()
+    versions = {info["version"] for info, _ in records if info["tag"] == tag}
+    from packaging.version import Version
+    return [{"version": version, "tag": tag} for version in sorted(versions, key=Version, reverse=True)
+            if _latest(records, version, tag) is not None]
 
 
 def _sums(raw: bytes) -> dict[str, str]:
@@ -215,56 +289,122 @@ def _valid_size(root: Path, version: str) -> int:
     return total
 
 
-def prepare(state_dir: Path, version: str) -> int | None:
-    if not re.fullmatch(_VERSION, version):
+def _cache_pair(state_dir, version, tag):
+    _pair(version, tag)
+    parent = Path(state_dir) / "strategy-finder"
+    for component in (parent, parent / "downloads", parent / "downloads" / version,
+                      parent / "downloads" / version / tag):
+        if component.is_symlink() or (component.exists() and not component.is_dir()):
+            raise ValueError("Unsafe release cache")
+    return parent / "downloads" / version / tag
+
+
+def pinned_path(state_dir, version, tag, supply):
+    """Validate the exact update binding without consulting GitHub or a selector."""
+    parent = _cache_pair(state_dir, version, tag)
+    if not isinstance(supply, dict) or supply.get("version") != version or supply.get("tag") != tag:
+        raise ValueError("Supply belongs to another version or stage")
+    identifier, digest = supply.get("release_id"), supply.get("checksums_sha256")
+    if (type(identifier) is not int or identifier <= 0 or not isinstance(digest, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            or supply.get("directory") != f"{identifier}-{digest}"):
+        raise ValueError("Invalid pinned supply identity")
+    target = parent / supply["directory"]
+    if target.is_symlink() or not target.is_dir():
+        raise ValueError("No safe pinned supply")
+    if (sha256((target / "SHA256SUMS").read_bytes()).hexdigest() != digest
+            or _valid_size(target, version) != supply.get("size_bytes")):
+        raise ValueError("Pinned supply changed")
+    sums = _sums((target / "SHA256SUMS").read_bytes())
+    if f"core-{supply.get('source_sha')}.tar.gz" not in sums:
+        raise ValueError("Pinned source identity changed")
+    git_tag = supply.get("git_tag")
+    if not isinstance(git_tag, str) or not _TAG.fullmatch(git_tag):
+        raise ValueError("Invalid pinned Git reference")
+    return target
+
+
+def for_update(state_dir, version, tag):
+    """Install the selected verified local supply, resolving only if none exists."""
+    pointer = _cache_pair(state_dir, version, tag) / "selected.json"
+    if pointer.is_symlink():
+        raise ValueError("Unsafe release selection")
+    if pointer.exists():
+        if pointer.stat().st_size > _MAX_SUMS:
+            raise ValueError("Invalid release selection")
+        supply = json.loads(pointer.read_bytes())
+        pinned_path(state_dir, version, tag, supply)
+        return supply
+    return prepare(state_dir, version, tag)
+
+
+def prepare(state_dir: Path, version: str, tag: str):
+    """An explicit download always resolves the latest publication of this pair."""
+    parent = _cache_pair(state_dir, version, tag)
+    selected = latest(version, tag)
+    if selected is None:
         return None
-    store = state_dir / "strategy-finder" / "downloads"
-    target = store / version
-    if store.is_symlink() or target.is_symlink():
-        raise ValueError("Unsafe release cache")
-    if target.exists():
-        if not target.is_dir():
-            raise ValueError("Release cache path is not a directory")
+    info, files = selected
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _cache_pair(state_dir, version, tag)
+    pointer = parent / "selected.json"
+    if pointer.is_symlink():
+        raise ValueError("Unsafe release selection")
+    sums_raw = releases.fetch_release_asset(info["git_tag"], "SHA256SUMS", files["SHA256SUMS"])
+    sums = _sums(sums_raw)
+    if sums.keys() != files.keys() - {"SHA256SUMS"}:
+        raise ValueError("Release checksums do not cover the complete supply")
+    digest = sha256(sums_raw).hexdigest()
+    source = next(name for name in files if _SOURCE.fullmatch(name))
+    supply = {"version": version, "tag": tag, "release_id": info["release_id"],
+              "git_tag": info["git_tag"], "source_sha": source[5:-7],
+              "checksums_sha256": digest, "directory": f"{info['release_id']}-{digest}",
+              "size_bytes": sum(size for name, size in files.items() if name != "SHA256SUMS")}
+    target = parent / supply["directory"]
+    if target.exists() or target.is_symlink():
         try:
-            return _valid_size(target, version)
+            pinned_path(state_dir, version, tag, supply)
         except (OSError, ValueError):
-            # A damaged local supply is not a usable release. Leave it
-            # in place until a new complete supply has been validated.
-            pass
-    candidates = [(info, files) for info, files in catalog() if info["version"] == version]
-    if not candidates:
-        return None
-    if len(candidates) != 1:
-        raise ValueError("Ambiguous version in release catalog")
-    info, files = candidates[0]
-    store.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if store.is_symlink():
-        raise ValueError("Unsafe release cache")
-    with TemporaryDirectory(prefix=".release-", dir=store) as temporary:
+            if target.is_symlink() or not target.is_dir():
+                raise ValueError("Unsafe release cache target")
+        else:
+            _write_private_json_atomic(pointer, supply)
+            return supply
+    with TemporaryDirectory(prefix=".release-", dir=parent) as temporary:
         stage = Path(temporary) / "delivery"
         stage.mkdir()
-        sums_raw = releases.fetch_release_asset(info["tag"], "SHA256SUMS", files["SHA256SUMS"])
-        sums = _sums(sums_raw)
-        if sums.keys() != files.keys() - {"SHA256SUMS"}:
-            raise ValueError("Release checksums do not cover the complete supply")
         (stage / "SHA256SUMS").write_bytes(sums_raw)
         for name, digest in sums.items():
-            data = releases.fetch_release_asset(info["tag"], name, files[name])
+            data = releases.fetch_release_asset(info["git_tag"], name, files[name])
             if len(data) != files[name] or sha256(data).hexdigest() != digest:
                 raise ValueError("Release checksum mismatch")
             (stage / name).write_bytes(data)
-        size = _valid_size(stage, version)
-        previous = Path(temporary) / "previous"
-        if target.exists():
-            target.rename(previous)
-        try:
-            stage.rename(target)
-        except OSError:
-            if previous.exists():
-                os.replace(previous, target)
-            raise
-        _fsync_directory(store)
-    return size
+        _valid_size(stage, version)
+        with _CACHE_PUBLICATION:
+            # Another preparation may have published this exact bundle while
+            # network I/O was in progress. Never move a valid update binding.
+            reusable = False
+            if target.exists() or target.is_symlink():
+                try:
+                    pinned_path(state_dir, version, tag, supply)
+                    reusable = True
+                except (OSError, ValueError):
+                    if target.is_symlink() or not target.is_dir():
+                        raise ValueError("Unsafe release cache target")
+            if not reusable:
+                previous = Path(temporary) / "previous"
+                if target.exists():
+                    target.rename(previous)
+                try:
+                    stage.rename(target)
+                except OSError:
+                    if previous.exists():
+                        os.replace(previous, target)
+                    raise
+                _fsync_directory(parent)
+            pinned_path(state_dir, version, tag, supply)
+            _write_private_json_atomic(pointer, supply)
+    return supply
 
 
 def is_rate_limit(error):

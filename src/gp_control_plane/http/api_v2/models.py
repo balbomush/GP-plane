@@ -273,28 +273,29 @@ class CoreStatus(BaseModel):
 
 class Release(BaseModel):
     version: str
-    tag: str
-    prerelease: bool
+    tag: Literal['alpha', 'prerelease', 'stable']
 
 
 class ReleaseList(BaseModel):
-    channel: Literal['stable', 'prerelease']
     items: list[Release]
 
 
 class VersionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
-    version: Annotated[str, Field(min_length=1, description='Точное Release.version из списка, не произвольный tag/URL. API установки не допускает понижение по нормализованной версии пакета PEP440.')]
+    version: Annotated[str, Field(min_length=1, max_length=64, pattern=r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:(a|b|rc)(0|[1-9][0-9]*))?(?:\.post(0|[1-9][0-9]*))?$', description='Точное Release.version из списка, не произвольный tag/URL. API установки не допускает понижение по нормализованной версии пакета PEP440.')]
+    tag: Literal['alpha', 'prerelease', 'stable']
 
 
 class Download(BaseModel):
     version: str
+    tag: Literal['alpha', 'prerelease', 'stable']
     size_bytes: Annotated[int, Field(ge=0)]
 
 
 class Update(BaseModel):
     update_id: Annotated[str, Field(min_length=1, pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', json_schema_extra={'format': 'uuid'})]
     target_version: str
+    tag: Literal['alpha', 'prerelease', 'stable']
     state: Literal['running', 'succeeded', 'failed', 'unknown']
     error: Error | None
 
@@ -316,7 +317,8 @@ class ExportManifest(BaseModel):
 
 class UpdateRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
-    version: Annotated[str, Field(min_length=1, description='Точное Release.version; не произвольный tag/URL.')]
+    version: Annotated[str, Field(min_length=1, max_length=64, pattern=r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:(a|b|rc)(0|[1-9][0-9]*))?(?:\.post(0|[1-9][0-9]*))?$', description='Точное Release.version; не произвольный tag/URL.')]
+    tag: Literal['alpha', 'prerelease', 'stable']
     update_id: Annotated[str, Field(description='Уникальный ID, созданный и сохранённый клиентом до отправки. Записывается Core до запуска installer, нужен для чтения после потери 202.', pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', json_schema_extra={'format': 'uuid'})]
 
 

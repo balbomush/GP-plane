@@ -40,7 +40,7 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
                              self.expected_version)
         status, _, spec = self.call("GET", "/openapi.json", b"")
         self.assertEqual(status, 200)
-        self.assertEqual(spec["info"]["version"], "2.0.0-draft.33")
+        self.assertEqual(spec["info"]["version"], "2.0.0-draft.34")
         self.assertEqual(sum(len(methods) for methods in spec["paths"].values()), 41)
         for path, methods in spec["paths"].items():
             for method in methods:
@@ -111,7 +111,7 @@ class Api2CoreRuntimeTests(Api2HttpFixture, unittest.TestCase):
                                         {"update_id": "invalid uuid"}, login["bearer_token"])
         self.assertEqual(status, 400)
         self.assertEqual({(row["field"], row["code"]) for row in response["error"]["details"]}, {
-            ("body:/update_id", "invalid_value"), ("body:/version", "required"),
+            ("body:/update_id", "invalid_value"), ("body:/version", "required"), ("body:/tag", "required"),
             ("query:unexpected", "unknown_parameter"),
         })
 

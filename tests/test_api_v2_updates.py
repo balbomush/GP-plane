@@ -42,9 +42,9 @@ class UpdateTests(unittest.TestCase):
             preparations = []
             done = Event()
 
-            def prepare(state_dir, version):
+            def prepare(state_dir, version, tag):
                 preparations.append(version)
-                return 1
+                return {"version": version, "tag": tag, "directory": "bound-B"}
 
             def launch(update_id, version):
                 self.assertEqual(manager.read(update_id)["state"], "running")
@@ -54,26 +54,28 @@ class UpdateTests(unittest.TestCase):
             manager = CoreUpdate(state, admission, prepare=prepare, launch=launch, probe=lambda: False)
             with admission.claim("search"):
                 with self.assertRaises(OperationBusy):
-                    manager.start(FIRST, "0.5.0")
+                    manager.start(FIRST, "0.5.0", "alpha")
             self.assertEqual(preparations, [])
-            status, report = manager.start(FIRST, "0.5.0")
+            status, report = manager.start(FIRST, "0.5.0", "alpha")
             self.assertEqual((status, report["update_id"]), (202, FIRST))
-            self.assertEqual(manager.start(FIRST, "0.5.0")[0], 200)
+            self.assertEqual(manager.start(FIRST, "0.5.0", "alpha")[0], 200)
             with self.assertRaisesRegex(ValueError, "другая версия"):
-                manager.start(FIRST, "0.5.1")
+                manager.start(FIRST, "0.5.1", "alpha")
             self.assertEqual(launches, [(FIRST, "0.5.0")])
+            with self.assertRaisesRegex(ValueError, "стадия"):
+                manager.start(FIRST, "0.5.0", "stable")
             with self.assertRaises(OperationBusy):
-                manager.start(SECOND, "0.5.0")
+                manager.start(SECOND, "0.5.0", "alpha")
             done.set()
             manager._worker.join(3)
             self.assertFalse(manager._worker.is_alive())
             recovered = CoreUpdate(state, OperationAdmission(), prepare=prepare, launch=launch, probe=lambda: False)
-            self.assertEqual(recovered.start(FIRST, "0.5.0")[1]["state"], "unknown")
+            self.assertEqual(recovered.start(FIRST, "0.5.0", "alpha")[1]["state"], "unknown")
             unverified = CoreUpdate(state, OperationAdmission(), prepare=prepare,
                                     launch=launch, probe=lambda: None)
             self.assertEqual(unverified.read(FIRST)["state"], "unknown")
             with self.assertRaises(OperationBusy):
-                unverified.start(SECOND, "0.5.0")
+                unverified.start(SECOND, "0.5.0", "alpha")
             self.assertEqual(launches, [(FIRST, "0.5.0")])
             self.assertEqual(preparations, ["0.5.0"])
 
@@ -85,22 +87,22 @@ class UpdateTests(unittest.TestCase):
         done = Event()
         done.set()
 
-        def prepare(state, version):
+        def prepare(state, version, tag):
             if current_thread().name.startswith("stale-update"):
                 entered.set()
                 if not release.wait(5):
                     raise TimeoutError("stale request was not released")
-            return 1
+            return {"version": version, "tag": tag, "directory": "bound-B"}
 
         with TemporaryDirectory() as root:
             state = Path(root)
             manager = CoreUpdate(state, OperationAdmission(), prepare=prepare,
                                  launch=lambda *args: launches.append(args) or done, probe=lambda: False)
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stale-update") as executor:
-                delayed = executor.submit(manager.start, FIRST, "0.5.0")
+                delayed = executor.submit(manager.start, FIRST, "0.5.0", "alpha")
                 try:
                     self.assertTrue(entered.wait(3))
-                    self.assertEqual(manager.start(FIRST, "0.5.0")[0], 202)
+                    self.assertEqual(manager.start(FIRST, "0.5.0", "alpha")[0], 202)
                     manager._worker.join(3)
                     self.assertFalse(manager._worker.is_alive())
                 finally:
@@ -112,12 +114,69 @@ class UpdateTests(unittest.TestCase):
         class RejectedLaunch:
             def wait(self):
                 return 1
-
         with TemporaryDirectory() as root:
-            manager = CoreUpdate(Path(root), OperationAdmission(), prepare=lambda *_: 1,
+            manager = CoreUpdate(Path(root), OperationAdmission(), prepare=lambda *_: {"directory": "test"},
                                  launch=lambda *_: RejectedLaunch(), probe=lambda: False)
-            self.assertEqual(manager.start(FIRST, "0.5.0")[0], 202)
+            self.assertEqual(manager.start(FIRST, "0.5.0", "alpha")[0], 202)
             manager._worker.join(3)
             self.assertFalse(manager._worker.is_alive())
             self.assertEqual(manager.read(FIRST)["state"], "failed")
-            self.assertEqual(manager.start(FIRST, "0.5.0")[0], 200)
+            self.assertEqual(manager.start(FIRST, "0.5.0", "alpha")[0], 200)
+
+    def test_update_id_keeps_original_supply_after_later_download_and_stage_conflicts(self):
+        import json
+        from gp_control_plane import core_supply, releases
+        from tests.test_core_release_selection import row
+        from tests.test_api_v2_service import DELIVERY
+        with TemporaryDirectory() as root:
+            state = Path(root)
+            with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row(2)])), patch.object(
+                releases, "fetch_release_asset", side_effect=lambda t,n,s: DELIVERY[n]
+            ):
+                second = core_supply.prepare(state, "0.5.0", "alpha")
+            done = Event()
+            done.set()
+            launches = []
+            manager = CoreUpdate(state, OperationAdmission(), launch=lambda *a: launches.append(a) or done, probe=lambda: False)
+            with patch.object(releases, "fetch_github_releases", side_effect=OSError("offline")) as network:
+                self.assertEqual(manager.start(FIRST, "0.5.0", "alpha")[0], 202)
+                manager._worker.join(3)
+                network.assert_not_called()
+            saved = json.loads(manager.path.read_text())
+            self.assertEqual(saved["supply"], second)
+            with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row(3)])), patch.object(
+                releases, "fetch_release_asset", side_effect=lambda t,n,s: DELIVERY[n]
+            ):
+                core_supply.prepare(state, "0.5.0", "alpha")
+            self.assertEqual(manager.start(FIRST, "0.5.0", "alpha")[0], 200)
+            self.assertEqual(json.loads(manager.path.read_text())["supply"], second)
+            with self.assertRaisesRegex(ValueError, "стадия"):
+                manager.start(FIRST, "0.5.0", "stable")
+            self.assertEqual(len(launches), 1)
+
+    def test_downgrade_is_rejected_before_preparation(self):
+        with TemporaryDirectory() as root:
+            calls = []
+            manager = CoreUpdate(Path(root), OperationAdmission(), prepare=lambda *a: calls.append(a), probe=lambda: False)
+            with self.assertRaisesRegex(ValueError, "Понижение"):
+                manager.start(FIRST, "0.4.4", "stable")
+            self.assertEqual(calls, [])
+
+    def test_search_winning_final_admission_prevents_installer(self):
+        ready, release = Event(), Event()
+        def prepare(*args):
+            ready.set()
+            self.assertTrue(release.wait(5))
+            return {"directory": "B"}
+        with TemporaryDirectory() as root, ThreadPoolExecutor(max_workers=1) as pool:
+            launches = []
+            admission = OperationAdmission()
+            manager = CoreUpdate(Path(root), admission, prepare=prepare, launch=lambda *a: launches.append(a), probe=lambda: False)
+            result = pool.submit(manager.start, FIRST, "0.5.0", "alpha")
+            self.assertTrue(ready.wait(3))
+            with admission.claim("search"):
+                release.set()
+                with self.assertRaises(OperationBusy):
+                    result.result(5)
+            self.assertEqual(launches, [])
+            self.assertFalse(manager.path.exists())

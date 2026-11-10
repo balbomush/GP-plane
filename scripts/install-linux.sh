@@ -62,7 +62,7 @@ error = None if status != "failed" else {
 fd, stage = tempfile.mkstemp(prefix=".core-update-", dir=folder)
 try:
     with os.fdopen(fd, "w", encoding="utf8") as stream:
-        json.dump(dict(update_id=update_id, target_version=version, state=status, error=error), stream)
+        json.dump(dict(current, state=status, error=error), stream)
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(stage, target)
@@ -222,15 +222,24 @@ if [ "${1:-}" = --prepared-update ]; then
   trap 'rc=$?; if [ "$rc" -ne 0 ]; then update_report failed || true; fi' EXIT
   core_user "$install_dir/.venv/bin/python" -I -c \
     'import sys; from gp_control_plane import __version__; from gp_control_plane.application.core_update import version_key; assert version_key(sys.argv[1]) >= version_key(__version__)' "$expected_version"
-  ordinary_install '' '' "$state_dir/strategy-finder/downloads/$expected_version"
+  prepared_supply="$(core_user "$install_dir/.venv/bin/python" -I - "$state_dir" "$update_id" "$expected_version" <<'PINNED'
+import json, pathlib, sys
+from gp_control_plane.core_supply import pinned_path
+state, update_id, version = sys.argv[1:]
+report = json.loads((pathlib.Path(state) / "strategy-finder/core-update.json").read_text())
+assert report["update_id"] == update_id and report["target_version"] == version and report["state"] == "running"
+print(pinned_path(pathlib.Path(state), version, report["tag"], report["supply"]))
+PINNED
+)"
+  ordinary_install '' '' "$prepared_supply"
   exit
 fi
 
-SOURCE_DIR= INSTALL_USER= TAG= CANDIDATE_SHA= INSTALL_WEB= INSTALL_MODE=ordinary
+SOURCE_DIR= INSTALL_USER= TAG= CANDIDATE_SHA= INSTALL_WEB= SUPPLY_DIR= INSTALL_MODE=ordinary
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --source-dir|--install-user|--tag|--candidate-sha|--web|--mode)
-      [ "$#" -ge 2 ] || usage; value="$2"; case "$1" in --source-dir) SOURCE_DIR="$value";; --install-user) INSTALL_USER="$value";; --tag) TAG="$value";; --candidate-sha) CANDIDATE_SHA="$value";; --web) INSTALL_WEB="$value";; --mode) INSTALL_MODE="$value";; esac; shift 2 ;;
+    --source-dir|--install-user|--tag|--candidate-sha|--web|--mode|--supply-dir)
+      [ "$#" -ge 2 ] || usage; value="$2"; case "$1" in --source-dir) SOURCE_DIR="$value";; --install-user) INSTALL_USER="$value";; --tag) TAG="$value";; --candidate-sha) CANDIDATE_SHA="$value";; --web) INSTALL_WEB="$value";; --mode) INSTALL_MODE="$value";; --supply-dir) SUPPLY_DIR="$value";; esac; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -255,6 +264,11 @@ else
 fi
 [ -z "$(git -C "$SOURCE_DIR" status --porcelain)" ] || fail 'exact-tag source tree is not clean'
 INSTALL_COMMIT="$SOURCE_COMMIT"
+if [ -n "$SUPPLY_DIR" ]; then
+  [ "$INSTALL_MODE" = ordinary ] && [ -d "$SUPPLY_DIR" ] && [ ! -L "$SUPPLY_DIR" ] &&
+    [ "$(readlink -f -- "$SUPPLY_DIR")" = "$SUPPLY_DIR" ] || fail 'unsafe prepared supply directory'
+  [ -f "$SUPPLY_DIR/core-$SOURCE_COMMIT.tar.gz" ] || fail 'prepared supply does not match the source commit'
+fi
 target_home="$(getent passwd "$INSTALL_USER" | cut -d: -f6)"
 [ -n "$target_home" ] && [ -d "$target_home" ] || fail 'install-user home is unavailable'
 gp_root="$target_home/gp"; install_dir="$gp_root/GP-access-control-plane"; state_parent="$gp_root/.GP-access-control-plane.data"; state_dir="$state_parent/state"
@@ -271,9 +285,10 @@ if [ "$INSTALL_MODE" = ordinary ]; then
   if [ -e "$install_dir" ]; then
     expected_version="$(core_user python3 -I -c 'from pathlib import Path; import sys,tomllib; print(tomllib.loads((Path(sys.argv[1])/"pyproject.toml").read_text())["project"]["version"])' "$SOURCE_DIR")"
     manual_helper_source="$SOURCE_DIR"
-    ordinary_install "$SOURCE_DIR" '' ''
+    ordinary_install "$SOURCE_DIR" '' "$SUPPLY_DIR"
     exit
   fi
+  [ -z "$SUPPLY_DIR" ] || fail 'prepared supply requires an existing managed Core'
   [ ! -e "$state_parent" ] && [ ! -L "$state_parent" ] || fail 'managed state exists without a program; explicit clean installation is required to discard it'
 fi
 # Finish dependency preparation while the old GP is still running. No network

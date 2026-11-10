@@ -19,7 +19,7 @@ jobs:
       - run: python -m pip install --only-binary=:all: --require-hashes -r requirements/dev.lock
       - run: python -m mypy
       - run: python -m pip_audit --disable-pip --require-hashes -r requirements/a5-transport.lock -r requirements/build.lock -r requirements/dev.lock
-      - name: Compare the live API against draft.33
+      - name: Compare the live API against draft.34
         run: |
           archive=oasdiff_1.36.0_linux_amd64.tar.gz
           curl --fail --silent --show-error --location --max-time 90 \
@@ -29,7 +29,7 @@ jobs:
           tar -xf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" oasdiff
           PYTHONPATH=src python scripts/export-core-openapi.py "$RUNNER_TEMP/openapi.json"
           "$RUNNER_TEMP/oasdiff" breaking --flatten-allof --fail-on ERR \
-            tests/fixtures/api_v2/openapi-draft33.json "$RUNNER_TEMP/openapi.json"
+            tests/fixtures/api_v2/openapi-draft34.json "$RUNNER_TEMP/openapi.json"
       - name: Run Core behavior tests
         env:
           PYTHONPATH: src

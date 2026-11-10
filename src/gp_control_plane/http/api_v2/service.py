@@ -51,27 +51,28 @@ def register_service(
     @app.get(_ROOT + "/releases", **describe("listReleases"))
     @authorize
     def list_releases(request: Request):
-        query = Query(request, {"channel"})
-        channel = query.text("channel", values={"stable", "prerelease"}, default="stable")
+        query = Query(request, {"tag"})
+        tag = query.text("tag", values={"alpha", "stable", "prerelease"}, default="stable")
         query.check()
         try:
-            items = [info for info, _ in core_supply.catalog() if info["prerelease"] == (channel == "prerelease")]
+            items = core_supply.list_releases(tag)
         except (OSError, ValueError) as error:
             raise _upstream_error(error) from error
-        return {"channel": channel, "items": items}
+        return {"items": items}
 
     @app.post(_ROOT + "/download", **describe("downloadCore"))
     @authorize
     def download(request: Request):
-        version = required_text_fields(request, json_body(request, json_limit), VersionRequest)["version"]
+        body = required_text_fields(request, json_body(request, json_limit), VersionRequest)
+        version, tag = body["version"], body["tag"]
         with admission.claim("program_download"):
             try:
-                size = core_supply.prepare(state_dir, version)
+                supply = core_supply.prepare(state_dir, version, tag)
             except (OSError, ValueError) as error:
                 raise _upstream_error(error) from error
-            if size is None:
+            if supply is None:
                 raise ApiError(404, "not_found", "Точная поставка Core не найдена")
-        return {"version": version, "size_bytes": size}
+        return {"version": version, "tag": tag, "size_bytes": supply["size_bytes"]}
 
     if updater is None:
         return
@@ -95,7 +96,7 @@ def register_service(
         body = required_text_fields(request, json_body(request, json_limit), UpdateRequest)
         key = update_identity(body["update_id"])
         try:
-            status, report = updater.start(key, body["version"])
+            status, report = updater.start(key, body["version"], body["tag"])
             response.status_code = status
             return report
         except UpdateError as error:

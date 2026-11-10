@@ -85,38 +85,51 @@ class ServiceTests(Api2HttpFixture, unittest.TestCase):
         if self.configured:
             api_v2.register_service(app, self.state, admission=self.admission)
 
+    def test_stage_is_required_and_invalid_stage_or_unknown_fields_do_not_access_catalog(self):
+        token = self.call("POST", "/api/v2/access/authentication", {"username": "admin", "password": "admin"})[2]["bearer_token"]
+        with patch.object(releases, "fetch_github_releases") as fetch:
+            for body in ({"version": "0.5.0"}, {"version": "0.5.0", "tag": "beta"},
+                         {"version": "https://example.com", "tag": "alpha"},
+                         {"version": "0.5.0", "tag": "alpha", "url": "https://example.com"}):
+                self.assertEqual(self.call("POST", ROOT + "/download", body, token)[0], 400)
+            for query in ("?tag=beta", "?channel=prerelease", "?tag=alpha&extra=1"):
+                self.assertEqual(self.call("GET", ROOT + "/releases" + query, b"", token)[0], 400)
+            fetch.assert_not_called()
+
     def test_release_download_checks_exact_supply_and_busy_before_network(self):
         self.assertTrue(self.configured, "service routes are missing")
         token = self.call("POST", "/api/v2/access/authentication", {
             "username": "admin", "password": "admin",
         })[2]["bearer_token"]
         row = {
-            "tag_name": TAG, "prerelease": True, "draft": False,
+            "tag_name": TAG, "id": 1, "published_at": "2026-11-09T12:00:00Z", "prerelease": True, "draft": False,
             "assets": [{"name": name, "size": len(data)} for name, data in DELIVERY.items()],
         }
         with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])) as fetch:
             with self.admission.claim("search"):
                 status = self.call("GET", ROOT + "/status", b"", token)[2]
                 self.assertEqual((status["busy"], status["operation"]), (True, "search"))
-                status, _, result = self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)
+                status, _, result = self.call("POST", ROOT + "/download", {"version": "0.5.0", "tag": "alpha"}, token)
                 self.assertEqual((status, result["error"]["code"]), (409, "busy"))
                 self.assertEqual(result["error"]["details"], [{"operation": "search"}])
                 fetch.assert_not_called()
-            self.assertEqual(self.call("GET", ROOT + "/releases?channel=prerelease", b"", token)[2], {
-                "channel": "prerelease", "items": [{"tag": TAG, "version": "0.5.0", "prerelease": True}],
+            self.assertEqual(self.call("GET", ROOT + "/releases?tag=alpha", b"", token)[2], {
+                "items": [{"tag": "alpha", "version": "0.5.0"}],
             })
             with patch.object(releases, "fetch_release_asset", side_effect=lambda tag, name, size: DELIVERY[name]):
-                status, _, result = self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)
-            self.assertEqual((status, result), (200, {"version": "0.5.0", "size_bytes": sum(map(len, FILES.values()))}))
+                status, _, result = self.call("POST", ROOT + "/download", {"version": "0.5.0", "tag": "alpha"}, token)
+            self.assertEqual((status, result), (200, {"version": "0.5.0", "tag": "alpha", "size_bytes": sum(map(len, FILES.values()))}))
         with patch.object(releases, "fetch_github_releases", side_effect=OSError("offline")) as fetch:
-            self.assertEqual(self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)[0], 200)
-            fetch.assert_not_called()
-        cached_wheel = self.state / "strategy-finder" / "downloads" / "0.5.0" / WHEEL
+            self.assertEqual(self.call("POST", ROOT + "/download", {"version": "0.5.0", "tag": "alpha"}, token)[0], 502)
+            fetch.assert_called_once()
+        from gp_control_plane import core_supply
+        supply = core_supply.for_update(self.state, "0.5.0", "alpha")
+        cached_wheel = core_supply.pinned_path(self.state, "0.5.0", "alpha", supply) / WHEEL
         cached_wheel.write_bytes(b"damaged")
         with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])) as fetch, patch.object(
             releases, "fetch_release_asset", side_effect=lambda tag, name, size: DELIVERY[name]
         ):
-            self.assertEqual(self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)[0], 200)
+            self.assertEqual(self.call("POST", ROOT + "/download", {"version": "0.5.0", "tag": "alpha"}, token)[0], 200)
             fetch.assert_called_once()
         self.assertEqual(cached_wheel.read_bytes(), DELIVERY[WHEEL])
 
@@ -140,6 +153,6 @@ class ServiceTests(Api2HttpFixture, unittest.TestCase):
                 with patch.object(releases, "fetch_github_releases", return_value=json.dumps([row])), patch.object(
                     releases, "fetch_release_asset", side_effect=lambda tag, name, size: invalid[name]
                 ):
-                    status, _, body = self.call("POST", ROOT + "/download", {"version": "0.5.0"}, token)
+                    status, _, body = self.call("POST", ROOT + "/download", {"version": "0.5.0", "tag": "alpha"}, token)
                 self.assertEqual((status, body["error"]["code"]), (502, "upstream_error"))
                 self.assertEqual(cached_wheel.read_bytes(), b"damaged")

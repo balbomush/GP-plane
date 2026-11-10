@@ -80,7 +80,7 @@ def _launch(update_id, version):
 
 
 class CoreUpdate:
-    def __init__(self, state_dir, admission, *, prepare=core_supply.prepare, launch=_launch, probe=_probe_scope):
+    def __init__(self, state_dir, admission, *, prepare=core_supply.for_update, launch=_launch, probe=_probe_scope):
         self.path = Path(state_dir) / "strategy-finder" / "core-update.json"
         self.state_dir = state_dir
         self.admission = admission
@@ -124,17 +124,18 @@ class CoreUpdate:
                 raise UpdateError(404, "not_found", "Отчёт обновления не найден")
             return self._view(report)
 
-    def _known(self, update_id, version):
+    def _known(self, update_id, version, tag):
         report = self._saved()
         if report is None or report["update_id"] != update_id:
             return None
-        if report["target_version"] != version:
-            raise UpdateError(409, "state_conflict", "Для этого обновления сохранена другая версия")
+        if report["target_version"] != version or report.get("tag") != tag:
+            raise UpdateError(409, "state_conflict", "Для этого обновления сохранена другая версия или стадия")
         return self._view(report)
 
-    def start(self, update_id, version):
+    def start(self, update_id, version, tag):
+        core_supply._pair(version, tag)
         with self.guard:
-            known = self._known(update_id, version)
+            known = self._known(update_id, version, tag)
             if known is not None:
                 return 200, known
             active = self.admission.active
@@ -149,26 +150,27 @@ class CoreUpdate:
         if target < current:
             raise UpdateError(409, "downgrade_forbidden", "Понижение версии Core запрещено")
         try:
-            size = self.prepare(self.state_dir, version)
+            supply = self.prepare(self.state_dir, version, tag)
         except (OSError, ValueError):
             with self.guard:
-                known = self._known(update_id, version)
+                known = self._known(update_id, version, tag)
                 if known is not None:
                     return 200, known
             raise
-        if size is None:
+        if supply is None:
             with self.guard:
-                known = self._known(update_id, version)
+                known = self._known(update_id, version, tag)
                 if known is not None:
                     return 200, known
             raise UpdateError(404, "not_found", "Точная поставка Core не найдена")
         with self.guard:
-            known = self._known(update_id, version)
+            known = self._known(update_id, version, tag)
             if known is not None:
                 return 200, known
             slot = self.admission.claim("core_update")
             slot.__enter__()
-            report = {"update_id": update_id, "target_version": version, "state": "running", "error": None}
+            report = {"update_id": update_id, "target_version": version, "tag": tag,
+                      "supply": supply, "state": "running", "error": None}
             try:
                 self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 _write_private_json_atomic(self.path, report)

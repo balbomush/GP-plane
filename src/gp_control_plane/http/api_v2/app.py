@@ -46,7 +46,7 @@ def create_api2_app(state_dir, *, admission=None, search=None, updater=None, shu
                     logging.getLogger(__name__).error("operation=search_shutdown error_code=%s", code)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan,
-                  redirect_slashes=False, title="GP Plane API 2", version="2.0.0-draft.33",
+                  redirect_slashes=False, title="GP Plane API 2", version="2.0.0-draft.34",
                   servers=[{"url": "/api/v2"}],
                   openapi_tags=[{"name": name} for name in
                                 ("Доступ", "Поиск", "Данные", "Резервные копии", "Обслуживание")])
