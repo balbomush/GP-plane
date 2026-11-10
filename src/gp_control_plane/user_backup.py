@@ -1,6 +1,7 @@
 """The user-data subset of the Core snapshot archive for API 2."""
 
 from contextlib import closing, contextmanager
+from datetime import datetime
 import logging
 from pathlib import Path, PurePosixPath
 import shutil
@@ -257,6 +258,10 @@ def _check_json(text, expected_type, field):
 
 
 def _validate_row(table, row):
+    # These IDs are exposed as positive integers by API 2. Milestones
+    # explicitly allow zero; run/strategy identities are strings instead.
+    if table in ("engines", "domain_presets", "bundles") and row["id"] < 1:
+        raise ValueError("Invalid public ID")
     if table == "domain_presets":
         _check_json(row["source_json"], dict, "source")
         if row["kind"] not in ("user", "system"):
@@ -272,6 +277,20 @@ def _validate_row(table, row):
             raise ValueError("Invalid bundle source")
     if table != "runs":
         return
+    if not isinstance(row["id"], str) or not row["id"]:
+        raise ValueError("Invalid run ID")
+    for field in ("started_at", "finished_at"):
+        value = row[field]
+        if value is None:
+            continue
+        # Known times follow RFC3339 UTC; an unknown historical time stays NULL.
+        # fromisoformat also accepts date-only/naive forms, so check syntax first.
+        if not isinstance(value, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}"
+            r"(?:\.[0-9]+)?(?:[Zz]|\+00:00)", value,
+        ):
+            raise ValueError("Invalid run time")
+        datetime.fromisoformat(value.upper().replace("Z", "+00:00"))
     if row["status"] not in ("starting", "running", "stopping", "completed", "stopped", "failed"):
         raise ValueError("Invalid run status")
     for field, value_type in (
@@ -310,7 +329,6 @@ def _load_rows(folder, conn):
                 row = json.loads(line)
                 if not isinstance(row, dict) or row.keys() != set(columns):
                     raise ValueError(f"Invalid backup row in {table}")
-                _validate_row(table, row)
                 conn.execute(f"INSERT INTO {table}({', '.join(columns)}) VALUES({placeholders})",
                              [row[name] for name in columns])
     if conn.execute("SELECT max(id) FROM milestones").fetchone()[0] in (None, 0):
@@ -363,6 +381,11 @@ def _loaded_user_tables(folder, stage, version):
             _legacy_rows(folder, stage, source)
         else:
             raise ValueError("Unsupported backup version")
+        # Validate the complete staging set, including supported legacy imports,
+        # before normalizing interrupted runs, persisting assets or replacing data.
+        for table in USER_TABLES:
+            for row in source.execute(f"SELECT * FROM {table}"):
+                _validate_row(table, row)
         message = json.dumps({
             "code": "interrupted", "message": "Restored unfinished search",
         }, separators=(",", ":"))
