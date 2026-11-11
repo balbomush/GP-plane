@@ -275,7 +275,7 @@ def _validate_row(table, row):
         sources = _check_json(row["sources_json"], list, "bundle sources")
         if any(
             not isinstance(source, dict) or not isinstance(source.get("source"), str)
-            or not isinstance(source.get("name"), str)
+            or source.get("name") is not None and not isinstance(source["name"], str)
             or source.get("reference") is not None and not isinstance(source["reference"], str)
             for source in sources
         ):

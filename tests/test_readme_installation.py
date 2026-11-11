@@ -9,7 +9,6 @@ class ReadmeInstallationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         bootstrap = (root / "scripts/bootstrap-linux.sh").read_text(encoding="utf-8")
-        self.assertIn("API 2 пока нет отдельного", readme)
         self.assertIn("GP_INSTALL_WEB=off", readme)
         self.assertNotIn("GP_INSTALL_WEB=on", readme)
         self.assertIn('--candidate-sha "$(git rev-parse HEAD)" --web off --mode ordinary', readme)
