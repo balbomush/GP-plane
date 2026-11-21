@@ -3714,9 +3714,8 @@
           "Резервные копии"
         ],
         "summary": "Восстановить сохранённую копию",
-        "description": "Без тела. Ждёт окончания в том же запросе. Только пользовательские данные, замена без объединения; пароль, программа, служебные настройки и сохранённый архив прежние.",
+        "description": "Без тела. Ждёт окончания в том же запросе. Только пользовательские данные, замена без объединения; пароль, программа, служебные настройки и сохранённый архив прежние. Если передан Idempotency-Key, Core сохраняет результат вместе с заменой данных. Повтор успешного ключа возвращает исходный результат даже после удаления сохранённой копии. Ключ другого маршрута даёт 409 state_conflict.",
         "operationId": "restoreSavedBackup",
-        "parameters": [],
         "responses": {
           "200": {
             "description": "Результат",
@@ -3732,9 +3731,6 @@
             "description": "invalid_parameters — Проверьте параметры запроса",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "invalid_parameters": {
                     "summary": "Проверьте параметры запроса",
@@ -3752,25 +3748,17 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
           "401": {
             "description": "token_invalid — Токен недействителен token_expired — Срок токена истёк token_revoked — Токен отозван",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "Bearer при отказе проверки токена.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "token_invalid": {
                     "summary": "Токен недействителен",
@@ -3799,7 +3787,18 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Bearer при отказе проверки токена."
               }
             }
           },
@@ -3807,9 +3806,6 @@
             "description": "not_found — Сохранённой копии нет.",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "not_found": {
                     "summary": "Сохранённой копии нет.",
@@ -3820,6 +3816,9 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3828,9 +3827,6 @@
             "description": "busy — Core занят ресурсоёмкой операцией state_conflict — Состав архива не допускает восстановление; данные не заменены.",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "busy": {
                     "summary": "Core занят ресурсоёмкой операцией",
@@ -3855,6 +3851,9 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3863,9 +3862,6 @@
             "description": "storage_unavailable — Хранилище временно недоступно",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "storage_unavailable": {
                     "summary": "Хранилище временно недоступно",
@@ -3876,15 +3872,30 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
           "default": {
-            "description": "Default Response",
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Default Response"
           }
         },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "UUID одного пользовательского подтверждения. При повторе того же запроса передайте тот же UUID.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
         "x-heavy-operation": "backup_restore",
         "x-reject-unknown-parameters": true
       }
@@ -3895,21 +3906,8 @@
           "Резервные копии"
         ],
         "summary": "Восстановить из переданного файла",
-        "description": "Один синхронный запрос. Доступ, Content-Type/размер и атомарный допуск ДО приёма/временной записи тела. Слот удерживается до фактического окончания приёма/проверки/применения и завершения работы с временным входом. Обрыв приёма не меняет данные. Ошибка/обрыв освобождают слот после прекращения работы; после начала применения завершается целостная транзакция, не обещается откат по обрыву HTTP. Ошибка удаления закрытого входного файла — отдельное предупреждение, не ложный неуспех restore и не бессрочная блокировка. Без нового формата/vault; сохранённая копия и auth/service прежние. Приём ограничивает фактический объём и время отсутствия прогресса передачи; длительность всего восстановления фиксированными 5 секундами не ограничивается. При превышении объёма — 413; при зависшей передаче — 408 request_timeout, если ответ ещё можно доставить, иначе соединение закрывается. До применения проверяются распакованный объём и границы файлов: абсолютные пути, выход из корня и ссылки наружу не допускаются. После прекращения обработки закрываются временная запись/дескрипторы и освобождается слот. Штатно созданная копия должна восстанавливаться с той же конфигурацией лимитов.",
+        "description": "Один синхронный запрос. Доступ и Content-Type/размер проверяются до чтения тела. Для нового восстановления атомарный допуск выполняется до приёма и временной записи тела. Слот удерживается до фактического окончания приёма, проверки, применения и завершения работы с временным входом. Обрыв приёма не меняет данные. Ошибка/обрыв освобождают слот после прекращения работы; после начала применения завершается целостная транзакция, не обещается откат по обрыву HTTP. Ошибка удаления закрытого входного файла — отдельное предупреждение, не ложный неуспех restore и не бессрочная блокировка. Сохранённая копия и auth/service прежние. Приём ограничивает фактический объём и время отсутствия прогресса передачи; длительность всего восстановления фиксированными 5 секундами не ограничивается. При превышении объёма — 413; при зависшей передаче — 408 request_timeout, если ответ ещё можно доставить, иначе соединение закрывается. До применения проверяются распакованный объём и границы файлов. Абсолютные пути, выход из корня и ссылки наружу не допускаются. Штатно созданная копия должна восстанавливаться с той же конфигурацией лимитов. Если передан Idempotency-Key, Core сохраняет результат и SHA-256 вместе с заменой данных. Повтор успешного ключа сверяет SHA-256 переданного файла и возвращает исходный результат без распаковки и применения. Другой файл или маршрут с тем же ключом дают 409 state_conflict.",
         "operationId": "restoreBackupFile",
-        "parameters": [],
-        "requestBody": {
-          "description": "Один архив, не multipart и не base64. Сохранённый backup не подменяется. До приёма — доступ и допуск к тяжёлой операции.",
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "type": "string",
-                "format": "binary"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "description": "Результат",
@@ -3925,9 +3923,6 @@
             "description": "invalid_parameters — Проверьте параметры запроса",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "invalid_parameters": {
                     "summary": "Проверьте параметры запроса",
@@ -3945,25 +3940,17 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
           "401": {
             "description": "token_invalid — Токен недействителен token_expired — Срок токена истёк token_revoked — Токен отозван",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "Bearer при отказе проверки токена.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "token_invalid": {
                     "summary": "Токен недействителен",
@@ -3992,7 +3979,18 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Bearer при отказе проверки токена."
               }
             }
           },
@@ -4000,9 +3998,6 @@
             "description": "busy — Core занят ресурсоёмкой операцией state_conflict — Состав архива не допускает восстановление; данные не заменены.",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "busy": {
                     "summary": "Core занят ресурсоёмкой операцией",
@@ -4027,6 +4022,9 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4035,9 +4033,6 @@
             "description": "payload_too_large — Превышен допустимый размер запроса",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "payload_too_large": {
                     "summary": "Превышен допустимый размер запроса",
@@ -4048,6 +4043,9 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4056,9 +4054,6 @@
             "description": "unsupported_media_type — Неподдерживаемый Content-Type",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "unsupported_media_type": {
                     "summary": "Неподдерживаемый Content-Type",
@@ -4069,6 +4064,9 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4077,9 +4075,6 @@
             "description": "storage_unavailable — Хранилище временно недоступно",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "storage_unavailable": {
                     "summary": "Хранилище временно недоступно",
@@ -4090,21 +4085,21 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
           "default": {
-            "description": "Default Response",
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Default Response"
           },
           "408": {
             "description": "request_timeout — Приём архива прекращён: нет прогресса передачи.",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                },
                 "examples": {
                   "stalled_upload": {
                     "summary": "Приём архива прекращён: нет прогресса передачи",
@@ -4115,13 +4110,40 @@
                       }
                     }
                   }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           }
         },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "UUID одного пользовательского подтверждения. При повторе передайте тот же UUID и тот же файл.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
         "x-heavy-operation": "backup_restore",
-        "x-reject-unknown-parameters": true
+        "x-reject-unknown-parameters": true,
+        "requestBody": {
+          "required": true,
+          "description": "Один архив, не multipart и не base64. Сохранённый backup не подменяется. До приёма — доступ и допуск к тяжёлой операции.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
       }
     },
     "/service/status": {
@@ -7509,6 +7531,11 @@
               false,
               true
             ]
+          },
+          "backup_restore_idempotency": {
+            "type": "boolean",
+            "description": "Core поддерживает Idempotency-Key для обоих способов восстановления резервной копии.",
+            "default": false
           }
         },
         "type": "object",

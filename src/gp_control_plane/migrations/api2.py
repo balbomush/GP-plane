@@ -1,4 +1,4 @@
-"""Atomic v11-to-v12 migration. No old bootstrap or filesystem cutover."""
+"""Atomic API 2 storage migrations."""
 
 import json
 import re
@@ -6,11 +6,12 @@ import sqlite3
 
 from .. import auth
 from .api2_history import migrate_history
-from .api2_schema import ENGINES, INDEXES, TABLES, UNCHANGED_TABLES
+from .api2_schema import ENGINES, INDEXES, RESTORE_RECEIPTS, TABLES, UNCHANGED_TABLES
 
 
-VERSION = 12
-NAME = "api2_user_data"
+VERSION = 13
+NAME = "backup_restore_receipts"
+V12_REGISTRATION = (12, "api2_user_data")
 V11_COLUMNS = {
     "app_settings": "key value_json updated_at",
     "domain_presets": "id scope name kind label source_json",
@@ -39,6 +40,7 @@ V12_COLUMNS = {
     "strategy_result_engines": "id result_id engine_id",
 }
 REBUILT = ("strategy_domain_results", "preset_domains", "strategies", "runs", "meta", "app_settings")
+V13_COLUMNS = {**V12_COLUMNS, "backup_restore_receipts": "operation_key route fingerprint response_json"}
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -174,11 +176,26 @@ def _migrate_v11(conn: sqlite3.Connection, tables: set[str], v11_registrations: 
         conn.execute(f"DROP TABLE api2_old_{table}")
 
 
-def _validate_target(conn: sqlite3.Connection, tables: set[str], v11_registrations: tuple) -> None:
-    _validate_layout(conn, tables, V12_COLUMNS, VERSION)
-    _validate_retained_keys(conn, VERSION)
-    if _registrations(conn) not in ([(VERSION, NAME)], [*v11_registrations, (VERSION, NAME)]):
+def _validate_v12(conn: sqlite3.Connection, tables: set[str], v11_registrations: tuple) -> None:
+    _validate_layout(conn, tables, V12_COLUMNS, 12)
+    _validate_retained_keys(conn, 12)
+    if _registrations(conn) not in ([V12_REGISTRATION], [*v11_registrations, V12_REGISTRATION]):
         raise ValueError("Unexpected v12 migration registrations")
+
+
+def _validate_target(conn: sqlite3.Connection, tables: set[str], v11_registrations: tuple) -> None:
+    _validate_layout(conn, tables, V13_COLUMNS, VERSION)
+    _validate_retained_keys(conn, VERSION)
+    latest = (VERSION, NAME)
+    if _registrations(conn) not in (
+        [latest], [V12_REGISTRATION, latest], [*v11_registrations, V12_REGISTRATION, latest],
+    ):
+        raise ValueError(f"Unexpected v{VERSION} migration registrations")
+    primary_key = [
+        (row[1], row[5]) for row in conn.execute("PRAGMA table_info(backup_restore_receipts)") if row[5]
+    ]
+    if primary_key != [("operation_key", 1)]:
+        raise ValueError("Unexpected backup restore receipt key")
 
 def initialize(conn: sqlite3.Connection, v11_registrations: tuple, *, legacy_idle) -> None:
     """Initialize once under a writer lock; existing target DBs use a reader snapshot."""
@@ -209,8 +226,12 @@ def initialize(conn: sqlite3.Connection, v11_registrations: tuple, *, legacy_idl
             if not legacy_idle():
                 raise ValueError("Cannot migrate while a legacy search is active")
             _migrate_v11(conn, tables, v11_registrations)
+            conn.execute("INSERT INTO schema_migrations(version, name) VALUES(?, ?)", V12_REGISTRATION)
+        elif version == "12":
+            _validate_v12(conn, tables, v11_registrations)
         else:
             raise ValueError("Unsupported input schema for API 2 migration")
+        conn.execute(RESTORE_RECEIPTS)
         conn.execute(
             """INSERT INTO meta(key, value) VALUES('schema_version', ?)
                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",

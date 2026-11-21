@@ -102,6 +102,15 @@ TABLES = (
     )""",
 )
 
+RESTORE_RECEIPTS = """CREATE TABLE backup_restore_receipts (
+    operation_key TEXT PRIMARY KEY NOT NULL,
+    route TEXT NOT NULL CHECK(route IN ('saved', 'file')),
+    fingerprint TEXT,
+    response_json TEXT NOT NULL,
+    CHECK((route = 'saved' AND fingerprint IS NULL)
+       OR (route = 'file' AND fingerprint IS NOT NULL AND length(fingerprint) = 64))
+) WITHOUT ROWID"""
+
 INDEXES = (
     "CREATE INDEX strategy_results_by_domain ON strategy_domain_results(milestone_id, domain_id, strategy_id)",
     "CREATE INDEX bundle_results_by_domain ON bundle_domain_results(milestone_id, domain_id, bundle_id)",

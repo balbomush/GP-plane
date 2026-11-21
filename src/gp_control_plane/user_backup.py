@@ -79,8 +79,8 @@ def _copy_legacy(snapshot: Path, copy: Path) -> Path:
     return copy
 
 
-def restore_legacy_saved(state_dir: Path, snapshot: Path, stage: Path) -> None:
-    _restore_folder(state_dir, _copy_legacy(snapshot, stage / "legacy"), stage)
+def restore_legacy_saved(state_dir: Path, snapshot: Path, stage: Path, *, record_result=None) -> None:
+    _restore_folder(state_dir, _copy_legacy(snapshot, stage / "legacy"), stage, record_result=record_result)
 
 
 def _asset_root(state_dir):
@@ -352,17 +352,17 @@ def _legacy_rows(folder, stage, conn):
         _replace_rows(old, conn)
 
 
-def restore(state_dir: Path, archive, stage: Path) -> None:
+def restore(state_dir: Path, archive, stage: Path, *, record_result=None) -> None:
     folder = stage / "unpacked"
     folder.mkdir()
     try:
         _unpack(archive, folder)
     except BadZipFile as error:
         raise ValueError("Invalid backup ZIP") from error
-    _restore_folder(state_dir, folder, stage)
+    _restore_folder(state_dir, folder, stage, record_result=record_result)
 
 
-def _restore_folder(state_dir: Path, folder: Path, stage: Path) -> None:
+def _restore_folder(state_dir: Path, folder: Path, stage: Path, *, record_result=None) -> None:
     manifest = backups._read_manifest(folder / "manifest.json")
     if manifest.get("completed") != "true":
         raise ValueError("Incomplete backup")
@@ -372,6 +372,8 @@ def _restore_folder(state_dir: Path, folder: Path, stage: Path) -> None:
         with storage.connect_api2(state_dir) as target:
             target.execute("BEGIN IMMEDIATE")
             _replace_rows(source, target)
+            if record_result is not None:
+                record_result(target)
 
 
 @contextmanager

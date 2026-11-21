@@ -269,6 +269,7 @@ class CoreStatus(BaseModel):
     busy: bool
     operation: Literal['search', 'backup_create', 'backup_restore', 'archive_download', 'program_download', 'core_update', 'source_update'] | None
     backup_exists: Annotated[bool, Field(description='Есть ли сохранённая резервная копия: true — есть, false — нет. Незавершённый временный файл копией не считается. Это наличие копии, не подтверждение её целостности или возможности восстановления прямо сейчас.', examples=[False, True])]
+    backup_restore_idempotency: Annotated[bool, Field(description='Core поддерживает Idempotency-Key для обоих способов восстановления резервной копии.')] = False
 
 
 class Release(BaseModel):

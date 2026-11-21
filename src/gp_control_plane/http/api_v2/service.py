@@ -46,6 +46,7 @@ def register_service(
             "core_version": __version__, "api_version": "2", "storage": readiness,
             "busy": operation is not None, "operation": operation,
             "backup_exists": user_backup.saved_exists(state_dir),
+            "backup_restore_idempotency": True,
         }
 
     @app.get(_ROOT + "/releases", **describe("listReleases"))

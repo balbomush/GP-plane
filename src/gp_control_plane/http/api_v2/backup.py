@@ -1,7 +1,9 @@
 """User backup methods with admission before upload and cleanup before release."""
 
 from collections.abc import Iterable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
+from hashlib import sha256
+import json
 from threading import Lock
 
 from anyio import fail_after, from_thread
@@ -11,12 +13,13 @@ import re
 import shutil
 import sqlite3
 from tempfile import TemporaryDirectory, mkdtemp
+from uuid import UUID
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
-from ... import user_backup
-from ...application.operation_admission import OperationAdmission
+from ... import storage, user_backup
+from ...application.operation_admission import OperationAdmission, OperationBusy
 from ...resource_budget import BACKUP_STREAM_CHUNK_BYTES, BACKUP_UPLOAD_MAX_BYTES
 from .openapi import describe
 from .protocol import FileStream
@@ -27,6 +30,21 @@ from .query import Query
 
 _ROOT = "/api/v2/backup"
 _UPLOAD_IDLE_TIMEOUT_SECONDS = 30
+
+
+def _operation_key(request: Request) -> str | None:
+    values = request.headers.getlist("idempotency-key")
+    if not values:
+        return None
+    if len(values) == 1 and len(values[0]) == 36:
+        try:
+            parsed = str(UUID(values[0]))
+        except ValueError:
+            pass
+        else:
+            if parsed == values[0].lower():
+                return parsed
+    raise ApiError(400, "invalid_request", "Idempotency-Key должен содержать один UUID")
 
 
 def _file_body_size(request: Request, limit):
@@ -49,10 +67,11 @@ async def _next_chunk(stream):
         return await anext(stream, b"")
 
 
-def _receive(request: Request, destination, size):
+def _receive(request: Request, destination, size, *, fingerprint=False):
     remaining = size
     stream = request.stream()
-    with destination.open("xb") as output:
+    digest = sha256() if fingerprint else None
+    with destination.open("xb") if destination is not None else nullcontext() as output:
         while remaining:
             try:
                 data = from_thread.run(_next_chunk, stream)
@@ -62,8 +81,12 @@ def _receive(request: Request, destination, size):
                 raise ApiError(400, "invalid_request", "Не удалось принять архив") from error
             if not data or len(data) > remaining:
                 raise ApiError(400, "invalid_request", "Не удалось принять полный архив")
-            output.write(data)
+            if output is not None:
+                output.write(data)
+            if digest is not None:
+                digest.update(data)
             remaining -= len(data)
+    return digest.hexdigest() if digest is not None else None
 
 
 def _blocks(file) -> Iterable[bytes]:
@@ -90,8 +113,28 @@ def register_backups(
         finally:
             saved_lock.release()
 
-    def restore_at(request: Request, upload_size=None):
+    def read_receipt(key, route):
+        if key is None:
+            return None
+        with storage.open_api2(state_dir) as conn:
+            receipt = conn.execute(
+                "SELECT route, fingerprint, response_json FROM backup_restore_receipts WHERE operation_key = ?",
+                (key,),
+            ).fetchone()
+        if receipt is not None and receipt["route"] != route:
+            raise ApiError(409, "state_conflict", "Ключ уже использован для другого способа восстановления")
+        return receipt
+
+    def replay_receipt(receipt, request, upload_size):
+        if upload_size is not None:
+            fingerprint = _receive(request, None, upload_size, fingerprint=True)
+            if fingerprint != receipt["fingerprint"]:
+                raise ApiError(409, "state_conflict", "Ключ уже использован для другого файла")
+        return json.loads(receipt["response_json"])
+
+    def restore_at(request: Request, key, route, upload_size):
         restored = False
+        cleanup_attempted = False
         legacy = None
         if upload_size is None and not saved.is_file():
             legacy = user_backup.legacy_saved(state_dir)
@@ -100,30 +143,69 @@ def register_backups(
         saved.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         stage = Path(mkdtemp(prefix=".user-restore-", dir=saved.parent))
         response = {"restored": True}
+
+        def cleanup(warn):
+            nonlocal cleanup_attempted
+            cleanup_attempted = True
+            try:
+                shutil.rmtree(stage)
+            except OSError:
+                if warn:
+                    response["warnings"] = [{
+                        "code": "temporary_cleanup_failed", "message": "Не удалось убрать временный архив",
+                    }]
+
+        fingerprint = None
+
+        def record_result(conn):
+            # Rows and assets are already prepared. Capture the cleanup outcome
+            # before committing both the restored rows and the replayable result.
+            cleanup(True)
+            conn.execute(
+                """INSERT INTO backup_restore_receipts(operation_key, route, fingerprint, response_json)
+                   VALUES (?, ?, ?, ?)""",
+                (key, route, fingerprint, json.dumps(response, ensure_ascii=False)),
+            )
+
         try:
             archive = saved
             if upload_size is not None:
                 archive = stage / "incoming.zip"
-                _receive(request, archive, upload_size)
+                fingerprint = _receive(request, archive, upload_size, fingerprint=key is not None)
+            options = {"record_result": record_result} if key is not None else {}
             try:
                 if legacy is None:
-                    user_backup.restore(state_dir, archive, stage)
+                    user_backup.restore(state_dir, archive, stage, **options)
                 else:
-                    user_backup.restore_legacy_saved(state_dir, legacy, stage)
+                    user_backup.restore_legacy_saved(state_dir, legacy, stage, **options)
             except user_backup.BackupTooLarge as error:
                 raise ApiError(413, "payload_too_large", "Распакованный архив превышает допустимый размер") from error
             except (ValueError, FileNotFoundError, sqlite3.IntegrityError) as error:
                 raise ApiError(409, "archive_incomplete", "Архив не содержит полный пользовательский набор") from error
             restored = True
         finally:
-            try:
-                shutil.rmtree(stage)
-            except OSError:
-                if restored:
-                    response["warnings"] = [{
-                        "code": "temporary_cleanup_failed", "message": "Не удалось убрать временный архив",
-                    }]
+            if not cleanup_attempted:
+                cleanup(restored)
         return response
+
+    def restore_or_replay(request: Request, route, upload_size=None):
+        key = _operation_key(request)
+        receipt = read_receipt(key, route)
+        if receipt is not None:
+            return replay_receipt(receipt, request, upload_size)
+
+        try:
+            with admission.claim("backup_restore"):
+                receipt = read_receipt(key, route)
+                if receipt is None:
+                    with saved_file() if route == "saved" else nullcontext():
+                        return restore_at(request, key, route, upload_size)
+        except OperationBusy:
+            # The preceding owner can have committed since our first lookup.
+            receipt = read_receipt(key, route)
+            if receipt is None:
+                raise
+        return replay_receipt(receipt, request, upload_size)
 
     @app.post(_ROOT, **describe("createBackup"))
     @authorize
@@ -181,13 +263,11 @@ def register_backups(
     @authorize
     def restore(request: Request):
         no_body(request)
-        with admission.claim("backup_restore"), saved_file():
-            return restore_at(request)
+        return restore_or_replay(request, "saved")
 
     @app.post(_ROOT + "/restore-file", **describe("restoreBackupFile"))
     @authorize
     def restore_file(request: Request):
         Query(request, set(), accepts_body=True).check()
         size = _file_body_size(request, upload_limit)
-        with admission.claim("backup_restore"):
-            return restore_at(request, size)
+        return restore_or_replay(request, "file", size)

@@ -8,11 +8,12 @@ import tempfile
 import unittest
 
 from gp_control_plane import auth, storage
+from gp_control_plane.migrations import api2
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_v2"
 TABLES = {
-    "access_state", "bundle_domain_results", "bundles", "domain_presets",
+    "access_state", "backup_restore_receipts", "bundle_domain_results", "bundles", "domain_presets",
     "domains", "engines", "meta", "milestones", "preset_domains", "runs",
     "schema_migrations", "strategies", "strategy_domain_results",
     "strategy_result_engines",
@@ -43,6 +44,7 @@ class Api2MigrationTests(unittest.TestCase):
             self.assertEqual(tables, TABLES)
             self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 2)
             self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM backup_restore_receipts").fetchone()[0], 0)
             self.assertEqual([row[0] for row in conn.execute("SELECT id FROM milestones")], [1])
             access = dict(conn.execute("SELECT * FROM access_state").fetchone())
             self.assertTrue(auth._password_matches(access, "admin"))
@@ -98,6 +100,23 @@ class Api2MigrationTests(unittest.TestCase):
         with self.open_target() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=12").fetchone()[0], 1)
+
+    def test_v12_adds_restore_receipts_without_replacing_existing_rows(self):
+        with closing(sqlite3.connect(storage.db_path(self.state))) as conn, conn:
+            api2._create(conn)
+            api2._store_access(conn, auth.initial_core_settings())
+            conn.execute("INSERT INTO meta VALUES ('schema_version', '12')")
+            conn.execute("INSERT INTO schema_migrations(version, name) VALUES (12, 'api2_user_data')")
+            conn.execute("INSERT INTO domains(id, name) VALUES (7, 'existing.example')")
+            access = conn.execute("SELECT * FROM access_state").fetchone()
+        with self.open_target() as conn:
+            self.assertEqual(conn.execute("SELECT name FROM domains WHERE id=7").fetchone()[0], "existing.example")
+            self.assertEqual(tuple(conn.execute("SELECT * FROM access_state").fetchone()), access)
+            self.assertEqual(
+                [tuple(row) for row in conn.execute("SELECT version, name FROM schema_migrations ORDER BY version")],
+                [(12, "api2_user_data"), (13, "backup_restore_receipts")],
+            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM backup_restore_receipts").fetchone()[0], 0)
 
     def test_bad_auth_and_protocol_conflict_preserve_the_original_db(self):
         for mutation, error in [
